@@ -244,58 +244,58 @@ The library checks `typeof window` at every internal DOM access — it will neve
 ┌──────────────────────────────────────────────────────────────────────┐
 │                    BACKGROUND CAPTURE PIPELINE                       │
 │                                                                      │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  html2canvas renders document.documentElement               │    │
-│  │  at bgCaptureScale = 35%  (default)                         │    │
-│  │                                                             │    │
-│  │  1920 × 1080 screen  →  672 × 378 capture canvas           │    │
-│  │  ~8× fewer pixels than full-res → 8–25ms on modern laptop   │    │
-│  │                                                             │    │
-│  │  Glass elements are excluded via ignoreElements callback    │    │
-│  │  to prevent visual self-referential feedback loop.          │    │
-│  └─────────────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────────┐     │
+│  │  html2canvas renders document.documentElement               │     │
+│  │  at bgCaptureScale = 35%  (default)                         │     │
+│  │                                                             │     │
+│  │  1920 × 1080 screen  →  672 × 378 capture canvas            │     │
+│  │  ~8× fewer pixels than full-res → 8–25ms on modern laptop   │     │
+│  │                                                             │     │
+│  │  Glass elements are excluded via ignoreElements callback    │     │
+│  │  to prevent visual self-referential feedback loop.          │     │
+│  └─────────────────────────────────────────────────────────────┘     │
 │                             │                                        │
 │                             ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  gl.texImage2D() uploads the canvas to WebGL2 texture unit 1│    │
-│  │  Previous texture stays active during upload → no flicker   │    │
-│  │  gl.generateMipmap() → LINEAR_MIPMAP_LINEAR filtering       │    │
-│  └─────────────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────────┐     │
+│  │  gl.texImage2D() uploads the canvas to WebGL2 texture unit 1│     │
+│  │  Previous texture stays active during upload → no flicker   │     │
+│  │  gl.generateMipmap() → LINEAR_MIPMAP_LINEAR filtering       │     │
+│  └─────────────────────────────────────────────────────────────┘     │
 │                             │                                        │
 │                             ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  Per frame in the WebGL2 fragment shader (per pixel):        │    │
-│  │                                                             │    │
-│  │  a. surfaceNormal(uv)                                       │    │
-│  │       Finite-difference gradient of animated noise field    │    │
-│  │       → perturbed normal N in view space                    │    │
-│  │                                                             │    │
-│  │  b. refractUV(screenUV, N)                                  │    │
-│  │       Snell's law:  delta_uv = N.xy * (1/IOR) * strength    │    │
-│  │       + device/cursor tilt contribution * 0.4               │    │
-│  │                                                             │    │
-│  │  c. chromaticRefraction(uv, N)                              │    │
-│  │       Cauchy dispersion — three IOR offsets:                │    │
-│  │         R  →  IOR − 0.010  (refracts least  ~1.440)        │    │
-│  │         G  →  IOR          (reference       ~1.450)        │    │
-│  │         B  →  IOR + 0.018  (refracts most   ~1.468)        │    │
-│  │       Each channel samples texture at its own displaced UV  │    │
-│  │                                                             │    │
-│  │  d. environmentReflection(uv, N, fr)                        │    │
-│  │       At high Fresnel factor (grazing angles / edges):      │    │
-│  │       mirror-sample background horizontally → reflection    │    │
-│  │                                                             │    │
-│  │  e. Blend refracted background into caustic composite       │    │
-│  │       weight = smoothstep(centre→edge) * 0.28 * bgReady    │    │
-│  └─────────────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────────┐     │
+│  │  Per frame in the WebGL2 fragment shader (per pixel):       │     │
+│  │                                                             │     │
+│  │  a. surfaceNormal(uv)                                       │     │
+│  │       Finite-difference gradient of animated noise field    │     │
+│  │       → perturbed normal N in view space                    │     │
+│  │                                                             │     │
+│  │  b. refractUV(screenUV, N)                                  │     │
+│  │       Snell's law:  delta_uv = N.xy * (1/IOR) * strength    │     │
+│  │       + device/cursor tilt contribution * 0.4               │     │
+│  │                                                             │     │
+│  │  c. chromaticRefraction(uv, N)                              │     │
+│  │       Cauchy dispersion — three IOR offsets:                │     │
+│  │         R  →  IOR − 0.010  (refracts least  ~1.440)         │     │
+│  │         G  →  IOR          (reference       ~1.450)         │     │
+│  │         B  →  IOR + 0.018  (refracts most   ~1.468)         │     │
+│  │       Each channel samples texture at its own displaced UV  │     │
+│  │                                                             │     │
+│  │  d. environmentReflection(uv, N, fr)                        │     │
+│  │       At high Fresnel factor (grazing angles / edges):      │     │
+│  │       mirror-sample background horizontally → reflection    │     │
+│  │                                                             │     │
+│  │  e. Blend refracted background into caustic composite       │     │
+│  │       weight = smoothstep(centre→edge) * 0.28 * bgReady     │     │
+│  └─────────────────────────────────────────────────────────────┘     │
 │                             │                                        │
 │                             ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │  Recapture triggers:                                         │    │
-│  │    • setInterval every bgCaptureInterval ms (default 600)   │    │
-│  │    • window 'scroll' debounced at 150ms                     │    │
-│  │    • ResizeObserver on document.body                         │    │
-│  └─────────────────────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────────────────────┐     │
+│  │  Recapture triggers:                                        │     │
+│  │    • setInterval every bgCaptureInterval ms (default 600)   │     │
+│  │    • window 'scroll' debounced at 150ms                     │     │
+│  │    • ResizeObserver on document.body                        │     │
+│  └─────────────────────────────────────────────────────────────┘     │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
