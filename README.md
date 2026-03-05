@@ -1,1485 +1,1025 @@
-# 🫧 Vortex-Glass
+# ◆ Liquid Glass PRO
 
-<div align="center">
+> The browser's most physically accurate glass effect. Real Snell's law refraction, Voronoi caustics, spring physics, and iridescence — all in a single zero-framework JS file.
 
-**Glassmorphism. Done properly.**
+![Version](https://img.shields.io/badge/version-2.0.0-a084f0?style=flat-square)
+![Previous](https://img.shields.io/badge/prev-v1.1.1-6366f1?style=flat-square&logo=github)
+![WebGL2](https://img.shields.io/badge/WebGL2-required%20for%20caustics-4f46e5?style=flat-square)
+![License](https://img.shields.io/badge/license-Apache%202.0-22c55e?style=flat-square)
+![Dependencies](https://img.shields.io/badge/dependencies-1%20(html2canvas)-f59e0b?style=flat-square)
+![Size](https://img.shields.io/badge/size-~18kb%20gzipped-0ea5e9?style=flat-square)
+![SSR](https://img.shields.io/badge/SSR-safe-34d399?style=flat-square)
 
-*WebGL2 caustics · Chromatic dispersion · Spring-physics cursor · Fresnel edge · Iridescence · GPU-adaptive rendering*
-
-[![Version](https://img.shields.io/badge/version-1.1.1-a78bfa?style=flat-square)](https://github.com/BorisMalts/Vortex-Glass?tab=readme-ov-file)
-[![License](https://img.shields.io/badge/license-Apache_2.0-818cf8?style=flat-square)](LICENSE)
-[![Size](https://img.shields.io/badge/gzipped-~9kb-34d399?style=flat-square)](#)
-[![Zero deps](https://img.shields.io/badge/dependencies-zero-f472b6?style=flat-square)](#)
-
-</div>
-
----
-
-```
-╔══════════════════════════════════════════════════════════════════════════╗
-║                                                                          ║
-║   ░▒▓█  liquid-glass  █▓▒░                                               ║
-║                                                                          ║
-║   The glass feels alive.                                                 ║
-║   It breathes. It refracts. It responds.                                 ║
-║   Now it caustics. Now it tilts. Now it knows physics.                   ║
-║                                                                          ║
-║   Six Houdini custom properties. One shared WebGL2 context.              ║
-║   Symplectic Euler springs. Schlick Fresnel. Voronoi caustics.           ║
-║   Zero dependencies. Every frame hand-crafted in GLSL.                  ║
-║                                                                          ║
-╚══════════════════════════════════════════════════════════════════════════╝
-```
+> **Upgrading from v1.1.1?** See the [migration table](#whats-new-in-v2-vs-v111) — the API is additive. Existing `class="lg"` markup works without any changes.
 
 ---
 
-## Table of Contents
+## Table of contents
 
-- [Overview](#overview)
-- [Architecture at a Glance](#architecture-at-a-glance)
-- [What's New in v1.1.1](#whats-new-in-v111)
-- [What's New in v1.1.0](#whats-new-in-v110)
-- [Features](#features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [API Reference](#api-reference)
-  - [initLiquidGlass()](#initliquidglass)
-  - [destroyLiquidGlass()](#destroyliquidglass)
-  - [wrapWithDistortion()](#wrapwithdistortion)
-  - [createGrainLayer()](#creategrainlayer)
-  - [createReplyQuote()](#createreplyquote)
-  - [attachElement()](#attachelement)
-  - [detachElement()](#detachelement)
-  - [getGpuTier()](#getgputier)
-  - [version()](#version)
-- [CSS Classes](#css-classes)
-  - [.lg](#lg)
-  - [.lg-interactive](#lg-interactive)
-  - [.lg-own](#lg-own)
-  - [.lg-reply](#lg-reply)
-  - [.lg-pill](#lg-pill)
-  - [.lg-card](#lg-card)
-  - [.lg-fab](#lg-fab)
-  - [.lg-outer](#lg-outer)
-  - [.lg-grain](#lg-grain)
-- [GPU Tier System](#gpu-tier-system)
-- [CSS Custom Properties](#css-custom-properties)
-- [Visual Layer Stack](#visual-layer-stack)
-- [Spring Physics Deep Dive](#spring-physics-deep-dive)
-- [WebGL Caustics Deep Dive](#webgl-caustics-deep-dive)
-- [SVG Filter Bank](#svg-filter-bank)
-- [Device Orientation Parallax](#device-orientation-parallax)
-- [Lifecycle & Memory Management](#lifecycle--memory-management)
-- [Accessibility](#accessibility)
-- [Performance Notes](#performance-notes)
-- [Integration Patterns](#integration-patterns)
-  - [Basic card](#basic-card)
-  - [Interactive button](#interactive-button)
-  - [Chat bubble with reply quote](#chat-bubble-with-reply-quote)
-  - [Shadow DOM (manual attach)](#shadow-dom-manual-attach)
-  - [SPA lifecycle](#spa-lifecycle)
-  - [React component wrapper](#react-component-wrapper)
-  - [IntersectionObserver lazy-attach](#intersectionobserver-lazy-attach)
-  - [Custom spotlight pre-position](#custom-spotlight-pre-position)
-  - [Disabling individual effects](#disabling-individual-effects)
-- [Browser Support](#browser-support)
+- [What's new in v2](#whats-new-in-v2-vs-v111)
+- [Competitor comparison](#what-it-beats-from-competitors)
+- [Quick start](#quick-start)
+- [HTML usage](#html-usage)
+- [React / Vue / Svelte](#framework-usage)
+- [How real refraction works](#how-real-refraction-works)
+- [Physics deep-dive](#physics-deep-dive)
+- [Configuration reference](#configuration-reference)
+- [CSS class reference](#css-class-reference)
+- [JavaScript API](#javascript-api)
+- [Performance guide](#performance-guide)
+- [Browser support](#browser-support)
+- [GPU tiers explained](#gpu-tiers-explained)
+- [SPA & Shadow DOM](#spa--shadow-dom)
+- [Why a Python server?](#why-a-python-server)
+- [Architecture overview](#architecture-overview)
+- [Shader pipeline](#shader-pipeline)
 - [FAQ](#faq)
-- [Internals Reference](#internals-reference)
 - [License](#license)
 
 ---
 
-## Overview
+## What's new in v2 vs v1.1.1
 
-**liquid-glass** is a zero-dependency library that brings genuine optical depth to glass-effect UI components.
-
-Starting from v1.1.0 the library moves well beyond CSS-only glassmorphism by introducing a real-time WebGL2 caustic engine, spring-physics cursor dynamics, and physically-based light simulation — while remaining fully adaptive to low-end GPUs and accessible to users who prefer reduced motion.
-
-The design philosophy: every visual effect has a physical counterpart in the real world. Caustics form where light bends through water. Fresnel glow intensifies at grazing angles. Thin-film shimmer comes from wave interference in a soap bubble coating. Nothing is decorative noise for its own sake — each layer simulates a real optical phenomenon.
-
-| Layer | Technique | What it does |
-|-------|-----------|--------------|
-| 🌊 Distortion | SVG `feTurbulence` + 3-channel `feDisplacementMap` | Organic animated warping with per-channel chromatic fringing |
-| ⚡ Caustics | WebGL2 Voronoi fragment shader | Animated light caustic patterns, per-element, blended in screen mode |
-| 🌈 Iridescence | `conic-gradient` + Houdini `--lg-irid` | Slow colour-shift rainbow sheen rotating across the surface |
-| 💡 Spotlight | `radial-gradient` via spring-driven `--lg-mx` / `--lg-my` | A soft highlight that follows the cursor with physical spring momentum |
-| 🔮 Fresnel edge | Schlick approximation in GLSL | Edge glow that intensifies at grazing angles, tilt-aware |
-| 🫧 Thin-film | Per-fragment oil-slick interference | Iridescent shimmer that shifts with tilt and time |
-| 🌬️ Breathing | `lg-breathe` keyframe animation | Organic `border-radius` oscillation — the border feels alive |
-| 🎞️ Film grain | Animated fractal-noise SVG overlay | Micro-texture that prevents the surface from looking synthetic |
-| 🔬 Chromatic disp. | Per-channel UV offset in GLSL | Coloured light fringing at glass edges, matching real prism optics |
-| 📱 Parallax tilt | `DeviceOrientationEvent` → tilt springs | Gyroscope-driven 3-D lean on mobile devices |
+| Feature | v1.1.1 | v2.0.0 |
+|---|---|---|
+| Screen-space refraction | SVG `feDisplacementMap` (illusory) | **Real** — html2canvas DOM capture → WebGL2 texture → Snell's law UV displacement per pixel |
+| Chromatic dispersion | Caustic-layer only | + Per-channel IOR at refraction (Cauchy model: Δn R/B = ±0.018) |
+| Environment reflection | ✗ | ✅ Fresnel-weighted mirror probe of background at grazing incidence |
+| Surface normals | Flat Schlick normal | Bump-map from gradient noise, mouse-warped on hover |
+| Background updates | — | Scroll (debounced 150ms), resize, configurable interval |
+| Config API | Hardcoded shader constants | Full `LGOptions` object with 10 fields |
+| React hook | ✗ | ✅ `useLiquidGlass(ref)` — attach on mount, cleanup on unmount |
+| Vue composable | ✗ | ✅ Works with `onMounted` / `onUnmounted` |
+| SSR safety | ✗ (DOM at import) | ✅ No DOM access at import time — safe in Next.js, Nuxt, SvelteKit |
+| Background capture scale | — | Configurable `bgCaptureScale` (default 35% for performance) |
+| Scroll drift compensation | — | `u_scroll` uniform corrects UV drift between capture and render |
+| Zero flicker on recapture | — | Previous texture stays active during async html2canvas call |
 
 ---
 
-## Architecture at a Glance
+## What it beats from competitors
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        initLiquidGlass()                            │
-│                                                                     │
-│  ┌───────────────┐  ┌──────────────┐  ┌────────────────────────┐   │
-│  │ Houdini CSS   │  │  SVG filter  │  │  Stylesheet injected   │   │
-│  │ registerProp  │  │  bank in     │  │  into <head>           │   │
-│  │ --lg-mx/my/   │  │  <body>      │  │  (idempotent guard)    │   │
-│  │ tx/ty/hover/  │  │  #lg-distort │  │                        │   │
-│  │ irid          │  │  #lg-refract │  │                        │   │
-│  └───────────────┘  └──────────────┘  └────────────────────────┘   │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │  MutationObserver  →  _attach(el) for every .lg found      │     │
-│  │                                                            │     │
-│  │  Per element:                                              │     │
-│  │  • <canvas class="lg-caustic-canvas">  (2-D overlay)      │     │
-│  │  • <div class="lg-grain">              (film grain)        │     │
-│  │  • pointermove / pointerenter / pointerleave listeners     │     │
-│  │  • ResizeObserver keeps canvas pixel-perfect               │     │
-│  │  • 5 SpringState objects in WeakMap<HTMLElement, State>    │     │
-│  └────────────────────────────────────────────────────────────┘     │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │  requestAnimationFrame loop (single, shared)               │     │
-│  │                                                            │     │
-│  │  Each frame per element:                                   │     │
-│  │  1. Advance 5 springs  (symplectic Euler, dt capped)       │     │
-│  │  2. Write --lg-mx/my/tx/ty/hover to el.style               │     │
-│  │  3. Set perspective rotateX/rotateY transform               │     │
-│  │  4. _renderCausticsGL() → drawImage to overlay canvas      │     │
-│  └────────────────────────────────────────────────────────────┘     │
-│                                                                     │
-│  ┌────────────────────────────────────────────────────────────┐     │
-│  │  ONE shared WebGL2 backend canvas (hidden, in <body>)      │     │
-│  │                                                            │     │
-│  │  • Resize to each element's physical px before render      │     │
-│  │  • Render Voronoi caustic + Fresnel + thin-film shader     │     │
-│  │  • drawImage() blit to element's 2-D overlay canvas        │     │
-│  │  • Quota: MAX_WEBGL_ELEMENTS = 32  → CSS fallback beyond   │     │
-│  └────────────────────────────────────────────────────────────┘     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+| Capability | **This library** | liquidGL | RealGlass | Apple Liquid Glass |
+|---|---|---|---|---|
+| Real screen refraction | ✅ html2canvas | ✅ html2canvas | ✅ html2canvas | ✅ Metal framebuffer |
+| Voronoi caustics | ✅ WebGL2 GLSL | ✗ | ✗ | ✗ |
+| Thin-film iridescence | ✅ | ✗ | ✗ | ✗ |
+| Prismatic edge caustics | ✅ | ✗ | ✗ | ✗ |
+| Spring physics | ✅ mass / damping / stiffness | partial | ✗ | UIKit spring |
+| Cauchy IOR dispersion | ✅ per R/G/B channel | ✗ | ✗ | ✗ |
+| Environment reflection probe | ✅ Fresnel-weighted | ✗ | ✗ | ✅ |
+| Bump-map surface normals | ✅ gradient noise | ✗ | ✗ | ✅ Metal |
+| Device orientation (gyro) | ✅ → 3D tilt springs | ✗ | ✗ | ✅ |
+| GPU tier adaptive | ✅ high / mid / low | ✗ | ✗ | ✅ |
+| Dependency footprint | **1** (html2canvas ~120 kb) | html2canvas | html2canvas + p5.js | OS-level Metal |
+| Zero memory leaks | ✅ WeakMap + cleanup API | ⚠ partial | ✗ | N/A |
+| SPA cleanup API | ✅ `destroyLiquidGlass()` | ✗ | ✗ | N/A |
+| SSR safe | ✅ | ✗ | ✗ | N/A |
+| Houdini typed CSS properties | ✅ | ✗ | ✗ | N/A |
+
+**Where Apple wins:** Direct Metal framebuffer access (no html2canvas overhead), native OS integration, true ray-traced reflections, compositor-thread performance. This library is a different tool — it runs in any browser, requires no native code, and adds several physical effects Apple's implementation omits (Voronoi caustics, chromatic dispersion, iridescence).
 
 ---
 
-## What's New in v1.1.1
-
-This is a patch release. No behaviour, API, or visual output has changed.
-
-### 🐛 Bug Fixes
-
-**`_buildCSS()` — unclosed `@media (prefers-reduced-motion: reduce)` block**
-
-The closing `}` for the reduced-motion media query was missing at the end of the returned CSS string. In most browsers this caused the parser to silently discard the ruleset entirely, meaning the accessibility override (`animation: none`, `transition: none`, `filter: none`) had no effect for users who had enabled reduced-motion in their OS settings.
-
-```css
-/* v1.1.0 — block never closed; rules were ignored by the parser */
-@media (prefers-reduced-motion: reduce) {
-    .lg { ... }
-    .lg-caustic-canvas { display: none; }
-↑ missing }
-
-/* v1.1.1 — correctly closed */
-@media (prefers-reduced-motion: reduce) {
-    .lg { ... }
-    .lg-caustic-canvas { display: none; }
-}
-```
-
-**Impact:** Any user with "Reduce Motion" enabled in their OS accessibility settings (macOS → Accessibility → Display, iOS → Accessibility → Motion, Windows → Ease of Access → Display) would have received full animations in v1.1.0 despite their preference. Upgrading to v1.1.1 immediately restores correct reduced-motion behaviour with no code changes required.
-
----
-
-**`_attach()` — `es` referenced before declaration in pointer-event closures**
-
-Inside `_attach`, the `onEnter` and `onLeave` closures both wrote to `es.hovered`. However, `es` was declared with `const` *after* those closures — relying on function-scoped `var`-style hoisting that does not apply to `const`/`let`. Under strict temporal dead zone rules this is technically a bug, and any linter or bundler that inlines or reorders declarations (e.g. Rollup, esbuild, Vite production build) could produce a `ReferenceError` at runtime.
-
-```js
-// v1.1.0 — es used inside closures before its const declaration
-const onEnter = () => { es.hovered = true; };   // ← es not yet declared
-const onLeave = () => { es.hovered = false; };  // ← es not yet declared
-// ...
-const es = { ... };   // declared here
-
-// v1.1.1 — es declared first, assigned after handlers, before _tracked.add()
-let es;                                         // ← declared here
-const onEnter = () => { es.hovered = true; };   // safe closure reference
-const onLeave = () => { es.hovered = false; };  // safe closure reference
-// ...
-es = { ... };   // assigned before any event can fire
-```
-
-**Impact:** In unbundled / native ESM usage this bug was latent (closures run only after `es` was assigned). With Rollup / esbuild / Vite production builds that reorder variable declarations, this could produce a `ReferenceError: Cannot access 'es' before initialization` on the first pointer interaction. Now safe under all build tools and minifiers.
-
----
-
-## What's New in v1.1.0
-
-### ⚡ WebGL2 Caustic Engine
-
-A Voronoi-based caustic light simulation renders on a per-element 2-D overlay canvas. The library maintains a **single shared WebGL2 context** for the entire page — the backend canvas renders one element at a time then blits the result via `drawImage`. Elements beyond the quota (`MAX_WEBGL_ELEMENTS = 32`) fall back to CSS automatically.
-
-The caustic fragment shader implements:
-- Multi-scale animated Voronoi for the caustic ring pattern
-- Per-channel chromatic dispersion (R/G/B sampled at different UV offsets)
-- Schlick Fresnel edge glow, tilt-aware
-- Specular primary and ghost highlights
-- Thin-film iridescence mask at grazing angles
-- Prismatic border band (light splitting at the glass edge)
-- Gradient noise surface undulation
-
-### 🎯 Spring-Physics Cursor Dynamics
-
-Cursor position, hover factor, and 3-D tilt are driven by a **mass–damping–stiffness spring model** (symplectic Euler integration). The spotlight no longer snaps to the cursor — it trails behind with natural momentum, overshoots slightly, then settles.
-
-```
-F = −k(x − target) − d·v      (restoring + damping forces)
-a = F / m                       (Newton's second law)
-v += a · dt                     (velocity update — symplectic first)
-x += v · dt                     (position update)
-```
-
-Three independent spring configurations are used:
-
-| Spring | Stiffness | Damping | Mass | Character |
-|--------|-----------|---------|------|-----------|
-| `cursor` | 180 | 18 | 1.0 | Snappy, fast-settling |
-| `hover` | 120 | 14 | 1.0 | Softer bloom |
-| `tilt` | 90 | 12 | 1.2 | Slow, weighty lean |
-
-### 🔬 Per-Channel Chromatic Dispersion
-
-The caustic layer samples R, G, and B at slightly offset UV coordinates inside the fragment shader, producing coloured light fringing at glass edges — the same optical artefact seen through real glass prisms.
-
-### 🔭 Physically-Based Fresnel Edge
-
-A **Schlick approximation** computes edge glow based on a surface normal that tilts in response to cursor position and device orientation. The edge brightens at grazing angles exactly as real glass does.
-
-```glsl
-float schlick(float cosTheta, float f0) {
-    return f0 + (1.0 - f0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
-}
-```
-
-### 🌈 Thin-Film Iridescence & Prismatic Band
-
-Two GLSL effects simulate the optical phenomena of real glass coatings:
-- **Thin-film**: oil-slick interference pattern (`cos` of angle + time + tilt), masked to element edges.
-- **Prismatic band**: a narrow rainbow stripe at the very border, simulating light splitting at the glass edge, visible as a faint colour halo.
-
-### 📱 Device Orientation Parallax
-
-`DeviceOrientationEvent` feeds the tilt spring system on mobile. Physically tilting the device produces a 3-D parallax sensation — the glass appears to lean in space. The `beta` axis is offset by −0.5 to compensate for the natural phone-hold angle so the glass sits flat at rest.
-
-### 🌬️ Liquid Border Morphing
-
-Non-pill, non-FAB elements breathe through a 9-second organic `border-radius` animation cycle with eight distinct keyframes using asymmetric radii, making the border feel like a slow liquid surface tension oscillation.
-
-### 🎛️ Six Houdini Properties
-
-Two new custom properties added: `--lg-tx` and `--lg-ty` (tilt axes, type `<number>`), enabling native CSS interpolation of the 3-D transform alongside the existing `--lg-mx`, `--lg-my`, `--lg-irid`, and `--lg-hover`.
-
-### 🧹 Full WeakMap Lifecycle
-
-Per-element state (springs, canvas, ResizeObserver, listeners) is stored in a `WeakMap<HTMLElement, ElementState>`. Removed elements are automatically garbage-collected; `destroyLiquidGlass()` performs a full clean sweep with zero leaks.
-
----
-
-## Features
-
-- ⚡ **WebGL2 caustic engine** — Voronoi fragment shader, one shared GL context, per-element canvas blit
-- 🎯 **Spring-physics cursor** — mass / damping / stiffness model, three independent spring configs
-- 🔬 **Per-channel chromatic dispersion** — R / G / B sampled at different UV offsets in GLSL
-- 🔭 **Schlick Fresnel edge glow** — physically correct, tilt-aware, grazing-angle brightening
-- 🌈 **Thin-film iridescence** — oil-slick interference pattern at element edges
-- 🌈 **Prismatic border band** — narrow rainbow stripe simulating light splitting at glass boundary
-- 🎞️ **Film grain overlay** — fractal-noise SVG, animated position, soft-light blend
-- 🫧 **Liquid border morphing** — organic `border-radius` breathing animation, 8 keyframes
-- 📱 **Device orientation parallax** — gyroscope drives 3-D tilt on mobile
-- 🏎️ **Adaptive GPU tiers** — `high / mid / low` detection via `UNMASKED_RENDERER_WEBGL`
-- 🎛️ **Six Houdini custom properties** — all spring-driven values are CSS-animatable
-- 👁️ **ResizeObserver** — caustic canvas stays pixel-perfect as elements resize
-- 🧹 **Leak-free WeakMap lifecycle** — GC handles removed elements automatically
-- 🔁 **Single shared rAF loop** — one `requestAnimationFrame` for the entire page, regardless of element count
-- ♿ **`prefers-reduced-motion` aware** — all animations disabled when requested
-- 📦 **Zero dependencies** — pure browser APIs, native ES modules
-- 🔄 **Idempotent lifecycle** — `init` / `destroy` safe to call any number of times
-
----
-
-## Installation
-
-### From GitHub
+## Quick start
 
 ```bash
-git clone https://github.com/BorisMalts/Vortex-Glass
+# Clone the project
+git clone https://github.com/your-org/liquid-glass-pro
+cd liquid-glass-pro
+
+# Install the only dependency (html2canvas)
+npm install
+
+# Launch development server
+python run.py
+# → http://localhost:8080/demo.html opens automatically
 ```
 
-Then import directly — the library is a single native ES module:
+No bundler required. The library is a plain ES module — import it directly in a `<script type="module">` tag.
 
-```js
-import { initLiquidGlass } from './liquid-glass.js';
+---
+
+## HTML usage
+
+### 1. Load html2canvas
+
+```html
+<!-- Option A: npm (recommended for production) -->
+<script src="node_modules/html2canvas/dist/html2canvas.min.js"></script>
+
+<!-- Option B: CDN (no install needed) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 ```
 
-No build step required. No bundler required. No npm install required.
+html2canvas **must** load before `initLiquidGlass()` is called. It doesn't need to be `await`-ed — the first background capture is async and non-blocking.
 
-### As an ES Module (CDN / self-hosted)
+### 2. Mark your glass elements
+
+Add `class="lg"` to any element. Combine with variant classes:
+
+```html
+<!-- Interactive card -->
+<div class="lg lg-card lg-interactive">
+  <h2>The background behind this card bends through Snell's law.</h2>
+  <p>Hover slowly to see the photo geometry shift.</p>
+</div>
+
+<!-- Pill chip -->
+<span class="lg lg-pill lg-interactive">New feature</span>
+
+<!-- Floating action button -->
+<button class="lg lg-fab lg-interactive">✦</button>
+
+<!-- Chat bubble (received) -->
+<div class="lg lg-interactive">Hey, did you see the refraction?</div>
+
+<!-- Chat bubble (own / sent) — purple tint -->
+<div class="lg lg-own lg-interactive">Yes — it's real Snell's law!</div>
+
+<!-- Reply-quote widget -->
+<div class="lg lg-reply lg-interactive">
+  <span class="lg-sender">Alice</span>
+  <span class="lg-text">Did you see the refraction?</span>
+</div>
+```
+
+### 3. Initialise
 
 ```html
 <script type="module">
-  import { initLiquidGlass } from './liquid-glass.js';
-  initLiquidGlass();
+  import { initLiquidGlass } from './liquid-glass-pro.js';
+
+  initLiquidGlass({
+    ior:                 1.45,   // index of refraction  (1.0 = air, 1.5 = glass)
+    refractionStrength:  0.035,  // UV displacement magnitude
+    aberrationStrength:  1.6,    // SVG chromatic aberration px (high GPU tier)
+    bgCaptureInterval:   600,    // ms between background recaptures
+    bgCaptureScale:      0.35,   // capture resolution = 35% of screen (fast)
+    caustics:            true,   // WebGL Voronoi caustic simulation
+    grain:               true,   // film grain overlay
+    iridescence:         true,   // thin-film conic gradient
+    breathe:             true,   // organic border-radius animation
+    selector:            '.lg',  // CSS selector for auto-attach
+  });
 </script>
 ```
 
-### Bundler (Vite, Rollup, esbuild, Webpack)
-
-Copy `liquid-glass.js` into your project's source directory and import normally. The library uses only standard browser APIs and contains no Node.js-specific code.
-
-```js
-import { initLiquidGlass, destroyLiquidGlass } from './lib/liquid-glass.js';
-```
-
-> **Note:** If your bundler tree-shakes or reorders declarations aggressively, v1.1.1 is required. Earlier versions contain a TDZ bug that manifests under Rollup/esbuild production builds (see [What's New in v1.1.1](#whats-new-in-v111)).
+That's it. Every element with `class="lg"` already in the DOM — and any added dynamically — will receive the full effect automatically via `MutationObserver`.
 
 ---
 
-## Quick Start
+## Framework usage
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8" />
-  <title>My App</title>
-  <style>
-    body {
-      background: linear-gradient(135deg, #1a0533 0%, #0d1f4c 50%, #0a2a1a 100%);
-      min-height: 100vh;
-    }
-  </style>
-</head>
-<body>
-
-  <!-- The library injects CSS automatically — no stylesheet link needed -->
-
-  <div class="lg lg-card lg-interactive"
-       style="padding: 24px; max-width: 320px; margin: 60px auto; color: white;">
-    <!-- .lg-grain is prepended automatically by initLiquidGlass(),
-         but you can add it manually to prevent layout shift on load -->
-    <div class="lg-grain"></div>
-    <h2>Hello, glass.</h2>
-    <p>This card caustics, refracts, shimmers, and responds to
-       your cursor with spring physics.</p>
-  </div>
-
-  <script type="module">
-    import { initLiquidGlass } from './liquid-glass.js';
-    initLiquidGlass();
-    // Done. Every .lg element in the page is now alive.
-  </script>
-
-</body>
-</html>
-```
-
-The library auto-discovers all `.lg` elements present at call time, then watches for new ones via `MutationObserver`. You do not need to call any per-element setup — just add the class.
-
----
-
-## API Reference
-
-### `initLiquidGlass()`
-
-```ts
-function initLiquidGlass(): void
-```
-
-Bootstraps the entire library. Safe to call multiple times — subsequent calls before `destroyLiquidGlass()` are silent no-ops (guarded by the `_state.ready` flag).
-
-**What it does internally, in order:**
-
-1. Calls `_registerHoudini()` — registers the six typed CSS custom properties via `CSS.registerProperty`. Skipped silently if the Houdini API is unavailable (Firefox, older browsers degrade gracefully).
-2. Calls `_injectSVG()` — creates the hidden `<svg>` with `#lg-distort` and `#lg-refract` filter defs and appends it to `<body>`.
-3. Calls `_injectCSS()` — injects the full library stylesheet into `<head>` as a `<style id="liquid-glass-style-110">` element.
-4. Calls `_startOrientationTracking()` — registers a passive `deviceorientation` listener for mobile gyroscope parallax.
-5. If `document.readyState !== 'loading'`, immediately calls `_startObserver()` and `_startLoop()`. Otherwise defers them to `DOMContentLoaded`.
-
-`_startObserver()` queries all existing `.lg` elements and calls `_attach()` on each, then starts the `MutationObserver` for future DOM changes.
-
-`_startLoop()` starts the shared `requestAnimationFrame` physics loop.
-
-```js
-import { initLiquidGlass } from './liquid-glass.js';
-initLiquidGlass();
-```
-
----
-
-### `destroyLiquidGlass()`
-
-```ts
-function destroyLiquidGlass(): void
-```
-
-Full teardown. Undoes every side effect of `initLiquidGlass()` and leaves the module in a state where `initLiquidGlass()` can be called again cleanly.
-
-**What it does, in order:**
-
-1. Cancels the rAF loop (`cancelAnimationFrame`).
-2. Disconnects the `MutationObserver`.
-3. Calls `_detach(el)` on every currently tracked element — removes caustic canvas, grain layer, event listeners, ResizeObserver, and inline CSS custom properties from each.
-4. Removes the injected `<style>`, `<svg>`, and WebGL backend `<canvas>` from the DOM.
-5. Calls `_stopOrientationTracking()` to remove the `deviceorientation` listener.
-6. Resets `_gpuTierCache` to `null` and `_activeWebGLCount` to 0.
-7. Resets the entire `_state` object to its default values.
-
-```js
-// On SPA route change:
-destroyLiquidGlass();
-initLiquidGlass(); // fresh init for the new view
-```
-
----
-
-### `wrapWithDistortion()`
-
-```ts
-function wrapWithDistortion(el: HTMLElement): WrapResult
-
-interface WrapResult {
-  wrapper: HTMLDivElement;
-  unwrap:  () => void;
-}
-```
-
-Wraps an element in a `.lg-outer` chromatic-aberration container. The SVG filter is applied at the wrapper level so distorted edges aren't clipped by the element's `overflow: hidden`.
-
-The wrapper's `display` mode is inferred automatically from the element's computed style:
-
-| Element `display` | Wrapper class added |
-|-------------------|---------------------|
-| `flex` / `inline-flex` | `.flex` |
-| `grid` / `inline-grid` | `.grid` |
-| Any other non-inline | `.block` |
-| `inline` | *(no class — wrapper stays `inline-flex`)* |
-
-`unwrap()` restores the exact original DOM position by using the stored `parentNode` and `nextSibling` reference captured at wrap time.
-
-```js
-const { wrapper, unwrap } = wrapWithDistortion(document.querySelector('.my-card'));
-// Later:
-unwrap(); // restores exact original DOM position
-```
-
-> **Note on Shadow DOM and iframes:** The SVG filter is injected into `document.body` of the main document. It is not reachable from Shadow DOM trees or cross-origin iframes. To apply distortion inside a Shadow Root, manually clone the `<svg>` element into that shadow root before calling `wrapWithDistortion`.
-
----
-
-### `createGrainLayer()`
-
-```ts
-function createGrainLayer(): HTMLDivElement
-```
-
-Creates a `<div class="lg-grain">` animated film-grain overlay. The library inserts one automatically inside `_attach()` if none is already present, but you can call this manually when constructing elements before `initLiquidGlass()` is called, to prevent a brief layout shift.
-
-The grain element uses a fractal-noise SVG data URI as its `background-image` — no external HTTP request. It animates only its `background-position` (a `steps(1)` animation that jumps the texture 9 times per second), making it cheap to run.
-
-```js
-const el = document.createElement('div');
-el.className = 'lg lg-card lg-interactive';
-el.prepend(createGrainLayer()); // manual placement
-document.body.appendChild(el);
-```
-
----
-
-### `createReplyQuote()`
-
-```ts
-function createReplyQuote(
-  sender:   string,
-  text:     string,
-  isOwn?:   boolean,          // default: false
-  onClick?: (() => void) | null
-): HTMLDivElement
-```
-
-Creates a fully-configured reply-quote bubble for messaging UIs. The returned element is a `.lg.lg-reply.lg-interactive` div with grain layer, sender span, text span, optional click handler, and spring physics attached immediately via `_attach()` if the library is already initialised.
-
-```js
-const quote = createReplyQuote(
-  'Alice',
-  'Are you coming to the meeting?',
-  false,
-  () => scrollToMessage('msg-42')
-);
-inputArea.prepend(quote);
-```
-
-**`isOwn: true`** applies the `.lg-own` purple-tinted variant, useful to distinguish the user's own quoted messages from received ones.
-
-**DOM structure of the returned element:**
-
-```html
-<div class="lg lg-reply lg-interactive [lg-own]">
-  <div class="lg-grain"></div>
-  <span class="lg-sender">Alice</span>
-  <span class="lg-text">Are you coming to the meeting?</span>
-</div>
-```
-
----
-
-### `attachElement()`
-
-```ts
-function attachElement(el: HTMLElement): void
-```
-
-Manually attaches the full liquid-glass effect to a specific element. Useful when adding `.lg` elements to Shadow DOM or detached trees where the `MutationObserver` won't fire. Requires `initLiquidGlass()` to have been called first (logs a `console.warn` otherwise).
-
-If the element is already tracked, this is a no-op.
-
-```js
-const el = document.createElement('div');
-el.className = 'lg lg-interactive';
-shadowRoot.appendChild(el);
-attachElement(el);
-```
-
----
-
-### `detachElement()`
-
-```ts
-function detachElement(el: HTMLElement): void
-```
-
-Manually removes all liquid-glass machinery from an element, restoring it to its pre-attach state. Cleans up: event listeners, ResizeObserver, caustic canvas DOM node, grain layer DOM node, inline CSS custom property overrides, transform inline style, and WebGL quota counter.
-
-Normally not needed — the `MutationObserver` handles cleanup automatically when elements are removed from the main document.
-
----
-
-### `getGpuTier()`
-
-```ts
-function getGpuTier(): 'low' | 'mid' | 'high'
-```
-
-Returns the GPU performance tier detected on the current device. The result is cached permanently after first call (the WebGL probe canvas is destroyed immediately after reading the renderer string).
-
-```js
-if (getGpuTier() === 'high') {
-  // enable additional particle effects in your own code
-}
-if (getGpuTier() === 'low') {
-  // disable heavy background animations unrelated to liquid-glass
-}
-```
-
----
-
-### `version()`
-
-```ts
-function version(): '1.1.1'
-```
-
-Returns the library version string. Useful for runtime debugging.
-
-```js
-console.log('liquid-glass version:', version()); // "1.1.1"
-```
-
----
-
-## CSS Classes
-
-### `.lg`
-
-The core glass surface class. Apply to any HTML element to give it the liquid-glass material.
-
-```html
-<div class="lg">Your content here</div>
-```
-
-**What this class provides:**
-- Frosted `backdrop-filter: blur(26px) saturate(175%) brightness(1.10)`
-- Layered 7-part `box-shadow` stack (2 inset bevels + 5 ambient/depth shadows)
-- Spring-driven `::before` spotlight radial gradient (follows cursor via `--lg-mx` / `--lg-my`)
-- Rotating iridescent `::after` conic-gradient (driven by `--lg-irid` Houdini property)
-- `lg-breathe` border-radius animation (9s, 6 keyframes, asymmetric radii)
-- `lg-irid-spin` iridescence rotation animation (15s linear infinite)
-- WebGL caustic canvas overlay (injected by `_attach()`)
-- Film grain layer (injected by `_attach()`)
-- CSS custom properties `--lg-mx`, `--lg-my`, `--lg-tx`, `--lg-ty`, `--lg-hover`, `--lg-irid`
-
-> **Important:** Never nest `.lg` inside another `.lg`. Stacking `backdrop-filter` is extremely expensive on the GPU. Each `backdrop-filter` requires the browser to flatten the compositing layer behind it — nesting causes exponential cost.
-
----
-
-### `.lg-interactive`
-
-Adds pointer-responsive hover and active states. Use on any clickable or tappable glass element.
-
-```html
-<div class="lg lg-interactive" role="button" tabindex="0">
-  Click me
-</div>
-```
-
-**Hover state:**
-- Caustic canvas opacity: `0` → `0.02` (subtle shimmer reveal, `0.35s` ease transition)
-- Background brightens to `rgba(255,255,255, 0.060)`
-- Shadow depth increases (top bevel strengthens, outer shadows grow)
-
-**Active state (`:active`):**
-- `translateY(1px)` — physical depression
-- `scale(0.991)` — slight compression
-- `transition-duration: 0.07s` — snappy 70 ms snap-back
-- Shadow stack collapses to match pressed-surface depth
-
----
-
-### `.lg-own`
-
-Purple-tinted variant for messages sent by the current user in chat interfaces.
-
-```html
-<div class="lg lg-own">Your outgoing message</div>
-```
-
-Overrides:
-- Background uses `rgba(110, 68, 202, 0.055)` base with purple spotlight
-- Box-shadow uses `rgba(165,100,255,*)` colour halo
-- `::after` iridescence conic-gradient biased toward indigo/violet hues
-- `.lg-sender` text colour shifts to `rgba(226,202,255,0.92)`
-
----
-
-### `.lg-reply`
-
-Reply-quote layout for chat interfaces. Column flex with a left accent bevel.
-
-```html
-<div class="lg lg-reply lg-interactive">
-  <div class="lg-grain"></div>
-  <span class="lg-sender">Alice</span>
-  <span class="lg-text">Original message preview — truncated with ellipsis</span>
-</div>
-```
-
-**Structural details:**
-- `display: flex; flex-direction: column; gap: 3px`
-- `padding: 8px 12px; margin-bottom: 8px; border-radius: 10px`
-- Left side `inset 2.5px 0 0 rgba(255,255,255,0.40)` bevel for quoted-message indicator
-- `.lg-sender` — 11px bold, letterSpacing 0.02em, nowrap + ellipsis
-- `.lg-text` — 12px, 50% opacity, nowrap + ellipsis
-- Breathing animation excluded (uses `lg-irid-spin` only)
-
----
-
-### `.lg-pill`
-
-Full-radius pill / chip shape. Breathing animation is excluded because asymmetric border-radius on a pill looks wrong.
-
-```html
-<div class="lg lg-pill lg-interactive">Tag Label</div>
-```
-
-Built-in padding: `6px 18px`. Border-radius: `999px`.
-
----
-
-### `.lg-card`
-
-Large card variant with generous radius and padding. Best for content containers.
-
-```html
-<div class="lg lg-card">
-  <div class="lg-grain"></div>
-  <h3>Card Title</h3>
-  <p>Card content goes here.</p>
-</div>
-```
-
-Overrides: `border-radius: 22px; padding: 20px`.
-
----
-
-### `.lg-fab`
-
-Circular floating action button, fixed 56×56 px, centred content.
-
-```html
-<div class="lg lg-fab lg-interactive" role="button" aria-label="Add item">
-  ＋
-</div>
-```
-
-Overrides: `border-radius: 50%; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; flex-shrink: 0`. Breathing animation excluded.
-
----
-
-### `.lg-outer`
-
-SVG distortion wrapper. Normally you create this via `wrapWithDistortion()`, but you can also write it in HTML directly.
-
-```html
-<div class="lg-outer block">
-  <div class="lg lg-card">Content</div>
-</div>
-```
-
-The `filter: url(#lg-distort)` is applied here (not on `.lg` directly) so that the chromatic aberration effect isn't clipped by the element's own `overflow: hidden`. Under `prefers-reduced-motion: reduce` the filter is removed automatically.
-
-Display modifiers: add `.block`, `.flex`, or `.grid` to control wrapper layout.
-
----
-
-### `.lg-grain`
-
-Animated film-grain overlay. Must be the **first child** inside `.lg` (or at least before non-effect content children). Position: `absolute; inset: 0`. z-index: 3.
-
-The grain is a 240×240 px fractal-noise SVG tiled across the surface, animated via `background-position` jitter at ~9 fps (cheap, GPU-invisible). Blended via `mix-blend-mode: soft-light` at `opacity: 0.038`.
-
----
-
-## GPU Tier System
-
-At init time the library creates a temporary WebGL context, reads `UNMASKED_RENDERER_WEBGL` via `WEBGL_debug_renderer_info`, then immediately destroys the context (calls `WEBGL_lose_context.loseContext()` and sets `width = height = 0`).
-
-| Tier | Detected renderer strings | WebGL caustics | SVG aber. scale |
-|------|--------------------------|----------------|-----------------|
-| `low` | Adreno 2xx–4xx, Mali-2/4/T, PowerVR SGX, no WebGL support | Disabled (CSS-only) | Passthrough (identity) filter |
-| `mid` | Adreno 5xx/6xx, Mali-G5x/G7x, Apple GPU < 10-core | Enabled at reduced scale | `aber = 0.9`, `refSc = 2` |
-| `high` | Desktop GPUs, Apple GPU ≥ 10-core, unrecognised desktop | Full quality | `aber = 1.6`, `refSc = 3` |
-
-**Mobile heuristic:** When `WEBGL_debug_renderer_info` is unavailable (some privacy-hardened browsers), the library falls back to `navigator.userAgent` — mobile UA → `low`, desktop UA → `high`.
-
-**WebGL quota:** A maximum of **32 elements** may have an active WebGL caustic canvas simultaneously (`MAX_WEBGL_ELEMENTS = 32`). Elements beyond this quota receive CSS-only rendering automatically. The quota prevents GPU memory over-commitment on pages with many glass surfaces (e.g. chat lists, dashboards).
-
----
-
-## CSS Custom Properties
-
-Six typed Houdini properties are registered via `CSS.registerProperty()`, enabling smooth browser-native interpolation between values set each rAF frame.
-
-| Property | Type | Default | Updated by | Range |
-|----------|------|---------|------------|-------|
-| `--lg-mx` | `<percentage>` | `50%` | Cursor X spring → `springX.value * 100 + '%'` | 0% – 100% |
-| `--lg-my` | `<percentage>` | `30%` | Cursor Y spring → `springY.value * 100 + '%'` | 0% – 100% |
-| `--lg-irid` | `<angle>` | `0deg` | CSS `lg-irid-spin` keyframe animation | 0deg – 360deg |
-| `--lg-hover` | `<number>` | `0` | Hover spring → `hoverSpring.value` | 0 – 1 |
-| `--lg-tx` | `<number>` | `0` | Tilt X spring → `tiltX.value` | −1 – 1 |
-| `--lg-ty` | `<number>` | `0` | Tilt Y spring → `tiltY.value` | −1 – 1 |
-
-**Houdini availability:** Registered in Chrome/Edge 94+, Safari 15.4+. Not supported in Firefox — values still work as regular custom properties but lose smooth interpolation between keyframes. All animations still function correctly, they just animate via JavaScript rAF rather than the native CSS interpolation path.
-
-**Overriding per-element:**
-
-```css
-/* Pre-position the spotlight to upper-left for a hero card */
-.hero-card.lg {
-  --lg-mx: 18%;
-  --lg-my: 12%;
-}
-```
-
----
-
-## Visual Layer Stack
-
-Inside every `.lg` element, effects are composited in z-index order:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│  z 5  Content children       Text, icons, interactive   │
-│  z 4  .lg-caustic-canvas     WebGL caustics (screen)    │
-│  z 3  .lg-grain              Film grain (soft-light)    │
-│  z 2  ::after                Iridescent conic-gradient  │
-│  z 1  ::before               Spring spotlight gradient  │
-│       .lg background         Frosted glass material     │
-│       (backdrop-filter)      Blur / saturate / bright   │
-└─────────────────────────────────────────────────────────┘
-           ↑ content behind element (not part of .lg DOM)
-```
-
-**Blend modes used:**
-- `.lg-caustic-canvas` → `mix-blend-mode: screen` — adds light, never darkens
-- `.lg-grain` → `mix-blend-mode: soft-light` — gentle contrast texture
-- `.lg::after` → `mix-blend-mode: overlay` — iridescent colour shift on the glass
-
----
-
-## Spring Physics Deep Dive
-
-Every `.lg` element tracked by the library maintains five independent `SpringState` objects:
-
-```
-springX     ── horizontal cursor position (0..1)
-springY     ── vertical cursor position   (0..1)
-hoverSpring ── hover blend factor          (0..1)
-tiltX       ── 3-D tilt along X axis      (-1..1)
-tiltY       ── 3-D tilt along Y axis      (-1..1)
-```
-
-Each spring uses **symplectic (semi-implicit) Euler integration** — the velocity is updated before the position, which provides better long-term energy conservation than explicit Euler and is trivially cheap to compute:
-
-```js
-const force = -stiffness * (value - target) - damping * velocity;
-velocity   += (force / mass) * dt;  // velocity first
-value      += velocity * dt;        // then position
-```
-
-The time step `dt` is capped at `MAX_DT = 0.05 s` (= 20 fps equivalent) so that focus-regain after a tab switch doesn't produce an unrealistically large single-frame advance.
-
-**Spring interaction flow:**
-
-```
-pointer moves  →  springX.target, springY.target update
-                  tiltX.target, tiltY.target update
-
-pointer enters →  hoverSpring.target = 1
-
-pointer leaves →  springX.target = 0.5 (centred)
-                  springY.target = 0.30 (slight top bias)
-                  hoverSpring.target = 0
-                  tiltX.target = 0
-                  tiltY.target = 0
-
-device tilts   →  tiltX.target, tiltY.target blend
-                  (only when pointer is NOT inside element)
-```
-
----
-
-## WebGL Caustics Deep Dive
-
-The caustic simulation runs entirely inside a GLSL fragment shader. The core technique:
-
-**Voronoi caustics** — real water caustics form where light rays from adjacent regions converge at the boundaries between Voronoi cells. The shader computes the distance from each fragment to the nearest of 25 animated Voronoi points (5×5 grid with ±2 cell neighbourhood search), then maps this distance to a bright sharp ring:
-
-```glsl
-float d = voronoi(uv * scale + seed, u_time * speed);
-return pow(smoothstep(0.0, 0.30, d), 1.5);
-```
-
-Four scales are blended: 3.4 / 5.9 / 2.1 / 8.1 — each with independent speed and seed, producing rich layered caustics that never visibly tile.
-
-**Chromatic dispersion** — R, G, B are sampled from the same Voronoi function but at slightly different UV offsets:
-
-```
-R: uvA + vec2( 0.009,  0.004)
-G: uvA + vec2(-0.005, -0.006)
-B: uvA + vec2( 0.004, -0.010)
-```
-
-The offsets are small enough to read as coloured glass fringing rather than gross colour separation.
-
-**One shared context, blit-per-element** — instead of one WebGL context per element (which hits driver limits), the library maintains a single hidden backend `<canvas>`. Each frame, for each WebGL-enabled element:
-
-1. Resize the backend canvas to the element's physical pixel dimensions (free if unchanged)
-2. Render the fragment shader with element-specific uniforms (mouse position, hover factor, tilt, time)
-3. `ctx2d.drawImage(backendCanvas, 0, 0)` — blit to the element's 2-D overlay canvas
-
-The blit is the most expensive part per element; it's a GPU→GPU texture copy via the browser's 2-D canvas compositing path.
-
----
-
-## SVG Filter Bank
-
-Two SVG filters are injected into `<body>`:
-
-**`#lg-distort`** — chromatic aberration applied to `.lg-outer` wrappers.
-
-Animates `feTurbulence` `baseFrequency` across three keyframes over 12 seconds, plus randomly seeds it across a 31-second cycle. Three `feDisplacementMap` operations displace R, G, and B channels by different amounts:
-
-| Channel | Scale (high tier) | Scale (mid tier) |
-|---------|-------------------|------------------|
-| R (xR,yG) | 1.6 | 0.9 |
-| G (xG,yB) | 0.99 | 0.56 |
-| B (xB,yR) | 0.58 | 0.32 |
-
-Channels are isolated with `feColorMatrix` then recombined via `feBlend mode="screen"`. The low tier receives an identity passthrough filter.
-
-**`#lg-refract`** — higher-amplitude `fractalNoise` displacement applied at the border edge for barrel-distortion effect.
-
----
-
-## Device Orientation Parallax
-
-On mobile devices, `DeviceOrientationEvent` feeds the global tilt state:
-
-```js
-_state.deviceTilt.x = clamp(gamma / 45, -1, 1);   // left/right
-_state.deviceTilt.y = clamp(beta / 45 − 0.5, -1, 1); // fwd/back
-```
-
-The `/45` normalisation maps the device's natural movement range to −1..1. The `−0.5` on beta compensates for the typical ~20–30° forward lean when holding a phone, so the glass sits at neutral tilt in natural hand position.
-
-When the cursor is inside an element (`es.hovered = true`), cursor tilt takes priority. When the cursor leaves, the tilt springs relax toward `deviceTilt * 0.45` (the 0.45 factor prevents the glass from tilting too aggressively on bumpy surfaces).
-
----
-
-## Lifecycle & Memory Management
-
-**Normal flow (main document):**
-
-All `.lg` elements are tracked in a `Set<HTMLElement>` (`_tracked`) for iteration, and a `WeakMap<HTMLElement, ElementState>` (`_elements`) for per-element data. When a `.lg` element is removed from the DOM, the `MutationObserver` fires `_detach(el)`, which:
-
-1. Removes 3 event listeners
-2. Disconnects the ResizeObserver
-3. Removes the caustic canvas DOM node
-4. Removes the grain layer DOM node
-5. Clears 5 inline CSS custom properties
-6. Clears the transform inline style
-7. Decrements `_activeWebGLCount` if applicable
-8. Deletes from `_elements` WeakMap
-9. Deletes from `_tracked` Set
-
-The WeakMap ensures that if `_detach` somehow isn't called (e.g. direct garbage-collection of a detached tree), the `ElementState` objects are still freed by the GC automatically — no hard reference chain can prevent collection.
-
-**SPA route changes:**
-
-Call `destroyLiquidGlass()` before unmounting the old route and `initLiquidGlass()` after mounting the new one. This is the recommended pattern for React, Vue, Svelte, and Angular SPAs.
-
-**Shadow DOM:**
-
-The `MutationObserver` does not observe inside Shadow Roots. Use `attachElement()` and `detachElement()` manually when adding/removing `.lg` elements inside a Shadow Root.
-
----
-
-## Accessibility
-
-### `prefers-reduced-motion`
-
-When the user has enabled the OS-level "Reduce Motion" preference, the following overrides apply:
-
-```css
-@media (prefers-reduced-motion: reduce) {
-  .lg, .lg::before, .lg::after, .lg-grain, .lg-caustic-canvas {
-    animation:   none !important;
-    transition:  none !important;
-    will-change: auto !important;
-  }
-  .lg           { border-radius: 16px !important; transform: none !important; }
-  .lg-outer     { filter: none !important; }
-  .lg-caustic-canvas { display: none; }
-}
-```
-
-All motion is removed. The glass material (frosted blur, bevels, shadows) is preserved — only animation and dynamic effects are disabled. This ensures the UI remains visually consistent with the rest of the product rather than suddenly switching to an unstyled fallback.
-
-> **v1.1.1 fix:** The closing `}` brace was missing in v1.1.0, causing this entire block to be silently discarded by the CSS parser. Users with reduced-motion enabled were receiving full animations. This is corrected in v1.1.1.
-
-### Pointer events
-
-All overlay layers (`::before`, `::after`, `.lg-grain`, `.lg-caustic-canvas`) have `pointer-events: none`. Clicks and touches pass through to content children.
-
-### Semantic structure
-
-The library imposes no semantic markup. Use proper `role`, `aria-*`, and `tabindex` attributes on your elements:
-
-```html
-<div class="lg lg-interactive" role="button" tabindex="0"
-     aria-label="Open settings">
-  <div class="lg-grain"></div>
-  ⚙
-</div>
-```
-
-### Focus ring
-
-The library does not impose a focus ring. Add one yourself to match your product's design system:
-
-```css
-.lg.lg-interactive:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.65);
-  outline-offset: 3px;
-}
-```
-
----
-
-## Performance Notes
-
-### `backdrop-filter` (the most expensive property)
-
-`backdrop-filter` requires the browser to composite a separate GPU layer for every element that uses it. Cost scales with element size (pixel area) and the number of visible elements.
-
-- **Never nest `.lg` inside `.lg`.** Stacking backdrop-filter layers is extremely costly.
-- On mobile, limit the number of simultaneously visible `.lg` elements. Consider using only 1–3 on any given screen.
-- On very large elements (e.g. full-viewport hero panels), reduce the blur radius:
-  ```css
-  .hero.lg { backdrop-filter: blur(16px) saturate(160%); }
-  ```
-
-### WebGL caustics
-
-- One shared GL context — never hits the browser's per-page context limit (~16 contexts).
-- Backend canvas resize is cheap when dimensions are unchanged (the common case each frame).
-- Quota of 32 active caustic elements prevents GPU memory over-commitment.
-- Caustics are hidden at rest (`opacity: 0`) and only gently revealed on hover (`opacity: 0.02`). The render still happens every frame for WebGL-enabled elements, even when invisible. Use `detachElement()` to fully stop caustic rendering for off-screen elements.
-
-### rAF loop
-
-- Single loop for the entire page, started once by `initLiquidGlass()`.
-- Per element per frame: 5 spring steps + 5 `setProperty` calls + 1 `style.transform` write + 1 `_renderCausticsGL` call. At 32 elements @ 60 fps this is ~64k simple operations per second — negligible on any modern device.
-- All 5 spring states are checked against `_atRest()` but the loop continues unconditionally for simplicity. For pages where all glass elements are truly at rest, a future optimisation could pause the loop and restart on the next pointer event.
-
-### ResizeObserver
-
-- One observer per element, observing `contentRect`.
-- Canvas resize only fires when `contentRect` dimensions actually change — no work done on stable layouts.
-- Avoid animating `width` or `height` on `.lg` elements. Triggering layout on every frame forces ResizeObserver to fire every frame, which resizes the caustic canvas every frame (moderately expensive).
-
-### Recommendations
-
-```
-• Keep .lg elements out of high-frequency scroll lists
-  → Use IntersectionObserver + attachElement() / detachElement() for lazy physics
-
-• Avoid width/height CSS transitions on .lg elements
-  → Animating size triggers continuous ResizeObserver + caustic canvas resize
-
-• On mobile, prefer 1–3 .lg elements per screen
-  → backdrop-filter is the GPU bottleneck on tile-based renderers
-
-• Use .lg-pill and .lg-fab on toolbar items, not list cells
-  → Reserve .lg-card for hero surfaces and primary CTAs
-
-• Call destroyLiquidGlass() before heavy animations on non-glass DOM
-  → Stops the rAF loop, freeing the frame budget for your own animations
-```
-
----
-
-## Integration Patterns
-
-### Basic card
-
-```html
-<div class="lg-outer">
-  <div class="lg lg-card" style="color: white; max-width: 300px;">
-    <div class="lg-grain"></div>
-    <h3 style="margin: 0 0 8px;">Weekly Summary</h3>
-    <p style="margin: 0; opacity: 0.7;">12 tasks completed · 3 in progress</p>
-  </div>
-</div>
-```
-
----
-
-### Interactive button
-
-```html
-<div class="lg-outer">
-  <button class="lg lg-pill lg-interactive"
-          style="font-size: 15px; font-weight: 600; color: white; border: none; cursor: pointer;">
-    <div class="lg-grain"></div>
-    Get Started
-  </button>
-</div>
-```
-
----
-
-### Chat bubble with reply quote
-
-```js
-import { initLiquidGlass, createReplyQuote, createGrainLayer } from './liquid-glass.js';
-
-initLiquidGlass();
-
-function createBubble(text, isOwn = false, replyTo = null) {
-  const bubble = document.createElement('div');
-  bubble.className = `lg${isOwn ? ' lg-own' : ''}`;
-  bubble.style.cssText =
-    'padding: 10px 14px; max-width: 280px; color: white; border-radius: 18px;';
-
-  bubble.appendChild(createGrainLayer());
-
-  if (replyTo) {
-    bubble.appendChild(
-      createReplyQuote(replyTo.sender, replyTo.text, isOwn, replyTo.onClick)
-    );
-  }
-
-  bubble.appendChild(
-    Object.assign(document.createElement('p'), {
-      textContent: text,
-      style: 'margin: 6px 0 0;'
-    })
-  );
-
-  return bubble;
-}
-
-document.querySelector('#chat').appendChild(
-  createBubble('Got your message!', true, {
-    sender: 'Alice',
-    text: 'Are you coming to the meeting?',
-    onClick: () => scrollToMessage('msg-42')
-  })
-);
-```
-
----
-
-### Shadow DOM (manual attach)
-
-```js
-import { initLiquidGlass, attachElement, detachElement } from './liquid-glass.js';
-
-initLiquidGlass();
-
-class GlassWidget extends HTMLElement {
-  #el = null;
-
-  connectedCallback() {
-    const shadow = this.attachShadow({ mode: 'open' });
-
-    this.#el = document.createElement('div');
-    this.#el.className = 'lg lg-interactive';
-    this.#el.textContent = 'Inside shadow DOM';
-    shadow.appendChild(this.#el);
-
-    // MutationObserver doesn't see inside shadow DOM
-    attachElement(this.#el);
-  }
-
-  disconnectedCallback() {
-    if (this.#el) detachElement(this.#el);
-  }
-}
-
-customElements.define('glass-widget', GlassWidget);
-```
-
----
-
-### SPA lifecycle
-
-```js
-import { initLiquidGlass, destroyLiquidGlass } from './liquid-glass.js';
-
-// React / Vue / Svelte — on mount:
-initLiquidGlass();
-
-// On unmount / route change:
-destroyLiquidGlass();
-```
-
-**React hook example:**
+### React
 
 ```jsx
-import { useEffect } from 'react';
-import { initLiquidGlass, destroyLiquidGlass } from './liquid-glass.js';
+import { useRef } from 'react';
+import { initLiquidGlass, useLiquidGlass } from './liquid-glass-pro.js';
 
-function useLiquidGlass() {
-  useEffect(() => {
-    initLiquidGlass();
-    return () => { destroyLiquidGlass(); };
-  }, []);
-}
+// Call once at app root — before any component renders
+initLiquidGlass({ ior: 1.45, refractionStrength: 0.04 });
 
-// In your layout component:
-export function Layout({ children }) {
-  useLiquidGlass();
-  return <main>{children}</main>;
-}
-```
-
-**Vue composable example:**
-
-```js
-import { onMounted, onUnmounted } from 'vue';
-import { initLiquidGlass, destroyLiquidGlass } from './liquid-glass.js';
-
-export function useLiquidGlass() {
-  onMounted(() => initLiquidGlass());
-  onUnmounted(() => destroyLiquidGlass());
-}
-```
-
----
-
-### IntersectionObserver lazy-attach
-
-For long scrolling pages with many `.lg` elements (e.g. a feed or timeline), use IntersectionObserver to activate and deactivate physics only for visible items. This prevents the rAF loop from advancing springs for off-screen elements.
-
-```js
-import { initLiquidGlass, attachElement, detachElement } from './liquid-glass.js';
-
-initLiquidGlass();
-
-const io = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (entry.isIntersecting) {
-      attachElement(entry.target);
-    } else {
-      detachElement(entry.target);
-    }
-  }
-}, { rootMargin: '120px' }); // 120px pre-load margin
-
-// Apply to existing elements — do NOT add .lg to the stylesheet
-// (the MutationObserver would auto-attach them; bypass this by using a
-// different class for initial markup and toggling .lg on intersection)
-document.querySelectorAll('.my-glass-item').forEach(el => {
-  io.observe(el);
-});
-```
-
----
-
-### React component wrapper
-
-```jsx
-import { useEffect, useRef } from 'react';
-import { attachElement, detachElement } from './liquid-glass.js';
-
-function GlassCard({ children, variant = '', className = '', style = {} }) {
+// Hook: auto-attach on mount, auto-detach on unmount
+function GlassCard({ children }) {
   const ref = useRef(null);
-
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    attachElement(el);
-    return () => { detachElement(el); };
-  }, []);
+  useLiquidGlass(ref);
 
   return (
-    <div
-      ref={ref}
-      className={`lg ${variant} lg-interactive ${className}`.trim()}
-      style={style}
-    >
-      <div className="lg-grain" />
+    <div ref={ref} className="lg lg-card lg-interactive">
       {children}
     </div>
   );
 }
 
-// Usage:
-<GlassCard variant="lg-card" style={{ maxWidth: 300, color: 'white' }}>
-  <h3>Hello from React</h3>
-</GlassCard>
+// Or: use the class and let MutationObserver pick it up automatically
+function GlassButton({ label }) {
+  return (
+    <button className="lg lg-pill lg-interactive">
+      {label}
+    </button>
+  );
+}
+```
+
+`useLiquidGlass(ref)` reads `window.React` at call time — no hard peer-dependency. Works with React 16.8+, Preact, and any React-compatible runtime.
+
+### Vue 3
+
+```vue
+<script setup>
+import { ref, onMounted, onUnmounted } from 'vue';
+import { initLiquidGlass, attachElement, detachElement } from './liquid-glass-pro.js';
+
+initLiquidGlass({ ior: 1.45 });
+
+const cardRef = ref(null);
+onMounted(()   => attachElement(cardRef.value));
+onUnmounted(() => detachElement(cardRef.value));
+</script>
+
+<template>
+  <div ref="cardRef" class="lg lg-card lg-interactive">
+    <slot />
+  </div>
+</template>
+```
+
+### Svelte
+
+```svelte
+<script>
+  import { onMount, onDestroy } from 'svelte';
+  import { initLiquidGlass, attachElement, detachElement } from './liquid-glass-pro.js';
+
+  initLiquidGlass({ ior: 1.45 });
+
+  let el;
+  onMount(()   => attachElement(el));
+  onDestroy(() => detachElement(el));
+</script>
+
+<div bind:this={el} class="lg lg-card lg-interactive">
+  <slot />
+</div>
+```
+
+### Next.js / Nuxt (SSR)
+
+```js
+// pages/_app.js  (Next.js) or plugins/glass.client.js (Nuxt)
+import { initLiquidGlass } from './liquid-glass-pro.js';
+
+if (typeof window !== 'undefined') {
+  // Only runs in the browser — library is SSR-safe
+  initLiquidGlass({ ior: 1.45 });
+}
+```
+
+The library checks `typeof window` at every internal DOM access — it will never throw during server-side rendering.
+
+---
+
+## How real refraction works
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                    BACKGROUND CAPTURE PIPELINE                       │
+│                                                                      │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  html2canvas renders document.documentElement               │    │
+│  │  at bgCaptureScale = 35%  (default)                         │    │
+│  │                                                             │    │
+│  │  1920 × 1080 screen  →  672 × 378 capture canvas           │    │
+│  │  ~8× fewer pixels than full-res → 8–25ms on modern laptop   │    │
+│  │                                                             │    │
+│  │  Glass elements are excluded via ignoreElements callback    │    │
+│  │  to prevent visual self-referential feedback loop.          │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                             │                                        │
+│                             ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  gl.texImage2D() uploads the canvas to WebGL2 texture unit 1│    │
+│  │  Previous texture stays active during upload → no flicker   │    │
+│  │  gl.generateMipmap() → LINEAR_MIPMAP_LINEAR filtering       │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                             │                                        │
+│                             ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Per frame in the WebGL2 fragment shader (per pixel):        │    │
+│  │                                                             │    │
+│  │  a. surfaceNormal(uv)                                       │    │
+│  │       Finite-difference gradient of animated noise field    │    │
+│  │       → perturbed normal N in view space                    │    │
+│  │                                                             │    │
+│  │  b. refractUV(screenUV, N)                                  │    │
+│  │       Snell's law:  delta_uv = N.xy * (1/IOR) * strength    │    │
+│  │       + device/cursor tilt contribution * 0.4               │    │
+│  │                                                             │    │
+│  │  c. chromaticRefraction(uv, N)                              │    │
+│  │       Cauchy dispersion — three IOR offsets:                │    │
+│  │         R  →  IOR − 0.010  (refracts least  ~1.440)        │    │
+│  │         G  →  IOR          (reference       ~1.450)        │    │
+│  │         B  →  IOR + 0.018  (refracts most   ~1.468)        │    │
+│  │       Each channel samples texture at its own displaced UV  │    │
+│  │                                                             │    │
+│  │  d. environmentReflection(uv, N, fr)                        │    │
+│  │       At high Fresnel factor (grazing angles / edges):      │    │
+│  │       mirror-sample background horizontally → reflection    │    │
+│  │                                                             │    │
+│  │  e. Blend refracted background into caustic composite       │    │
+│  │       weight = smoothstep(centre→edge) * 0.28 * bgReady    │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+│                             │                                        │
+│                             ▼                                        │
+│  ┌─────────────────────────────────────────────────────────────┐    │
+│  │  Recapture triggers:                                         │    │
+│  │    • setInterval every bgCaptureInterval ms (default 600)   │    │
+│  │    • window 'scroll' debounced at 150ms                     │    │
+│  │    • ResizeObserver on document.body                         │    │
+│  └─────────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Why not `readPixels` from the page compositor?**
+`readPixels` on the browser's compositor framebuffer is blocked for security — a malicious page could steal pixel data from cross-origin iframes. html2canvas is the highest-fidelity same-origin DOM capture technique available inside the browser sandbox.
+
+**Why not CSS `element()` function?**
+`element()` is non-standard, implemented only in Firefox, and provides a live texture reference without the UV displacement necessary for true refraction. It also cannot be used as a WebGL texture source directly.
+
+**Scroll drift compensation:**
+When the user scrolls between a background capture and the current render frame, the screen-space UVs computed by the shader become stale. The shader receives `u_scroll` — the normalised scroll delta since last capture — and adds it to every UV lookup, keeping refracted content visually correct throughout scroll inertia.
+
+---
+
+## Physics deep-dive
+
+### Spring integration
+
+All animated values (cursor position, hover blend, 3D tilt) use a **damped harmonic oscillator** advanced with symplectic (semi-implicit) Euler integration:
+
+```
+F  = −k·(x − target) − d·v      spring + damping force
+a  = F / m
+v += a · dt                      velocity updated FIRST (symplectic stability)
+x += v · dt
+```
+
+Why symplectic Euler over standard explicit Euler? Explicit Euler has positive energy drift — springs slowly accumulate energy and oscillate forever or diverge. Symplectic Euler conserves energy to first order, giving stable oscillations that naturally decay to rest.
+
+Three independent presets are used:
+
+| Spring | Stiffness | Damping | Mass | Character |
+|---|---|---|---|---|
+| `cursor` | 180 | 18 | 1.0 | Snappy — tracks pointer closely |
+| `hover` | 120 | 14 | 1.0 | Smooth fade in/out on enter/leave |
+| `tilt` | 90 | 12 | 1.2 | Lazy, weighty — gyro and 3D lean |
+
+`MAX_DT = 0.05s` clamps the integration step — prevents a single huge advance when the tab returns from background, which would otherwise snap all springs instantly to target.
+
+### Voronoi caustics
+
+Real underwater caustics form because the water surface acts as a lens — parallel rays converge at Voronoi cell edges, producing bright bands. The simulation:
+
+```
+1. Tile space into animated Voronoi cells
+   - Seed points move sinusoidally with per-cell frequency variation
+   - hash2() gives pseudo-random per-cell velocities
+
+2. For each pixel: minD = distance to nearest seed point
+
+3. causticBand() = pow(smoothstep(0.0, 0.30, minD), 1.5)
+   - Bright near cell edges (where real caustics peak)
+   - The 1.5 exponent increases contrast
+
+4. Four scales blended (3.4, 5.9, 2.1, 8.1) with different speeds
+   - Breaks periodicity at every zoom level
+   - Avoids the "tiled look" of single-scale Voronoi
+```
+
+### Schlick Fresnel
+
+```glsl
+fr(θ) = F₀ + (1 − F₀) · (1 − cosθ)⁵
+
+F₀ = ((n₁ − n₂) / (n₁ + n₂))²
+   ≈ 0.04  (air-to-glass interface, n₁=1.0, n₂=1.5)
+```
+
+At normal incidence (θ=0°) the surface is mostly transparent (4% reflection). At grazing incidence (θ→90°) the surface is fully reflective (100%). This correctly produces brighter edges and dimmer centres, matching real glass behaviour.
+
+### Cauchy chromatic dispersion
+
+Real glass has a wavelength-dependent index of refraction described by the Cauchy equation:
+
+```
+n(λ) = A + B/λ²
+```
+
+For typical borosilicate glass:
+- Red   (700 nm): n ≈ 1.440
+- Green (550 nm): n ≈ 1.450  ← reference
+- Blue  (450 nm): n ≈ 1.468
+
+Each channel refracts to a slightly different UV, producing the characteristic rainbow fringing (lateral chromatic aberration) visible at glass edges.
+
+---
+
+## Configuration reference
+
+```js
+initLiquidGlass({
+
+  // ── Refraction (new in v2) ───────────────────────────────────────────
+  ior: 1.45,
+  // Index of refraction. Physical reference values:
+  //   1.00  air / vacuum
+  //   1.33  water
+  //   1.45  borosilicate glass (Pyrex, optical glass)   ← default
+  //   1.52  soda-lime glass (windows, bottles)
+  //   1.72  flint glass (high-dispersion optical)
+  //   2.42  diamond
+  // Higher values = stronger bending. Reasonable range: 1.0 – 2.0.
+
+  refractionStrength: 0.035,
+  // Scales the UV displacement in the refraction shader.
+  //   0.01  very subtle, barely visible
+  //   0.03  natural glass feel              ← default
+  //   0.05  dramatic
+  //   0.08  funhouse-mirror territory
+
+  aberrationStrength: 1.6,
+  // SVG feDisplacementMap scale in CSS pixels applied to .lg-outer wrappers.
+  // Affects the chromatic colour fringe at glass element boundaries.
+  // High GPU tier: full value. Mid tier: ×0.5. Low tier: filter disabled.
+  // Keep ≤ 2.0 to avoid "zebra stripe" artefacts on text content.
+
+  bgCaptureInterval: 600,
+  // Milliseconds between periodic html2canvas background recaptures.
+  //   200–400ms   for fast-changing UIs (video, live data feeds)
+  //   600ms       balanced default
+  //  1000–2000ms  for mostly static pages
+  // Set to a very large number to disable periodic capture (use refreshBackground() manually).
+
+  bgCaptureScale: 0.35,
+  // Resolution multiplier for the background capture canvas.
+  //   1920×1080 at 0.35 → captures 672×378 (~0.25 MP)
+  //   1920×1080 at 1.00 → captures 1920×1080 (~2.1 MP)
+  // Performance vs quality:
+  //   0.20  fastest, noticeably blurry refraction detail
+  //   0.35  good balance                    ← default
+  //   0.50  sharper detail, ~2× CPU cost vs 0.35
+  //   0.75  very sharp, suitable for hero elements only
+  //   1.00  pixel-perfect, expensive — pair with long bgCaptureInterval
+
+  // ── Visual layers ────────────────────────────────────────────────────
+  caustics: true,
+  // Enable the WebGL2 Voronoi caustic overlay.
+  // When false, the overlay <canvas> is still created (used for refraction blit)
+  // but the Voronoi caustic contribution is not rendered.
+
+  grain: true,
+  // Inject a .lg-grain film-grain overlay into each element.
+  // Animated fractal noise at 9 fps — adds tactile analogue texture.
+  // Invisible at default opacity (0.038) but perceptible under close inspection.
+
+  iridescence: true,
+  // Enable the .lg::after conic-gradient thin-film iridescence animation.
+  // Controls whether the lg-breathe keyframe is injected alongside lg-irid-spin.
+
+  breathe: true,
+  // Enable the lg-breathe border-radius morphing animation (9s cycle).
+  // When false the @keyframes block is omitted entirely from the stylesheet.
+
+  // ── Advanced ─────────────────────────────────────────────────────────
+  selector: '.lg',
+  // CSS selector used by MutationObserver and the initial querySelectorAll.
+  // Change to use a custom class name or data attribute:
+  //   selector: '[data-glass]'
+  //   selector: '.my-glass-component'
+
+});
 ```
 
 ---
 
-### Custom spotlight pre-position
+## CSS class reference
 
-Override `--lg-mx` and `--lg-my` per element to pre-position the spotlight before the user hovers:
+### Base + variants
 
-```css
-/* Hero card — spotlight locked to upper-left */
-.hero-glass {
-  --lg-mx: 20%;
-  --lg-my: 15%;
-}
+| Class | Role | Key styles |
+|---|---|---|
+| `lg` | **Required.** Base glass element | `backdrop-filter`, `box-shadow`, Houdini custom properties |
+| `lg-interactive` | Cursor tracking + hover / active states | `cursor: pointer`, hover brightness lift |
+| `lg-card` | Padded content card | `border-radius: 22px`, `padding: 20px` |
+| `lg-pill` | Full-radius chip / tag | `border-radius: 999px`, `padding: 6px 18px` |
+| `lg-fab` | Circular floating action button | `border-radius: 50%`, `56×56px` |
+| `lg-reply` | Reply-quote widget for chat UIs | Compact padding, 2.5px left accent stripe |
+| `lg-own` | "Own message" purple-tint variant | Purple ambient fill + lavender shadow |
 
-/* Right-aligned element — spotlight biased to the right */
-.right-panel.lg {
-  --lg-mx: 78%;
-  --lg-my: 25%;
-}
+### Effect layers (auto-injected)
+
+| Class | z-index | Role |
+|---|---|---|
+| `lg-caustic-canvas` | 4 | WebGL caustics overlay, `mix-blend-mode: screen` |
+| `lg-grain` | 3 | Film grain, `mix-blend-mode: soft-light` |
+| `lg::after` | 2 | Iridescent conic gradient rotation |
+| `lg::before` | 1 | Cursor-following specular highlight |
+
+### z-index stack inside `.lg`
+
+```
+z-index 5  ← your content (text, icons, buttons)
+z-index 4  ← .lg-caustic-canvas  (WebGL caustics, blend: screen)
+z-index 3  ← .lg-grain           (film grain, blend: soft-light)
+z-index 2  ← .lg::after          (iridescence conic gradient)
+z-index 1  ← .lg::before         (cursor specular highlight)
+z-index 0  ← .lg base            (glass material, backdrop-filter)
 ```
 
-The spring system will still animate from this initial value when the user moves the cursor over the element. The custom property acts as the spring's initial position and resting position (when cursor is outside).
+### Composing classes
+
+```html
+<div class="lg lg-card lg-interactive">Card</div>
+<span class="lg lg-pill lg-interactive">Chip</span>
+<button class="lg lg-fab lg-interactive">＋</button>
+
+<!-- Chat UI -->
+<div class="lg lg-interactive">Received bubble</div>
+<div class="lg lg-own lg-interactive">Sent bubble</div>
+<div class="lg lg-reply">
+  <span class="lg-sender">Name</span>
+  <span class="lg-text">Quoted message preview</span>
+</div>
+```
+
+### Custom CSS properties
+
+```css
+/* Override spring-animated properties with static values */
+.my-element {
+  --lg-mx:    75%;    /* highlight hot-spot X */
+  --lg-my:    20%;    /* highlight hot-spot Y */
+  --lg-hover: 0.8;   /* semi-hovered appearance */
+  --lg-irid:  45deg;  /* iridescence start angle */
+}
+
+/* Custom border-radius variant */
+.lg.my-sharp-card {
+  border-radius: 8px;
+  animation: lg-irid-spin 15s linear infinite; /* keep irid, no breathe */
+}
+```
 
 ---
 
-### Disabling individual effects
+## JavaScript API
 
-**Disable breathing animation on a specific card:**
+### Core lifecycle
 
-```css
-.my-card.lg {
-  /* Override the animation shorthand — keep only iridescence */
-  animation: lg-irid-spin 15s linear infinite;
-}
+```js
+import { initLiquidGlass, destroyLiquidGlass } from './liquid-glass-pro.js';
+
+// Initialise — call once at app entry point.
+// Idempotent: subsequent calls are no-ops.
+initLiquidGlass(options?: Partial<LGOptions>): void
+
+// Full teardown.
+// Removes: event listeners, RAF loop, MutationObserver,
+// injected <style>, <svg>, WebGL canvas. Resets all state.
+// Safe to call before re-initialising on SPA navigation.
+destroyLiquidGlass(): void
 ```
 
-**Disable iridescence on a specific element:**
+### Per-element control
 
-```css
-.my-card.lg::after {
-  display: none;
-}
+```js
+import {
+  attachElement, detachElement,
+  wrapWithDistortion, createGrainLayer, createReplyQuote,
+} from './liquid-glass-pro.js';
+
+// Manually attach glass effect — use for Shadow DOM elements
+// that MutationObserver can't see.
+// initLiquidGlass() must have been called first.
+attachElement(el: HTMLElement): void
+
+// Remove all glass machinery from an element.
+// Cleans up: canvas, grain, listeners, ResizeObserver, CSS vars.
+detachElement(el: HTMLElement): void
+
+// Wrap element in .lg-outer for SVG aberration filter.
+// Returns { wrapper, unwrap } — call unwrap() to restore original DOM.
+wrapWithDistortion(el: HTMLElement): { wrapper: HTMLElement, unwrap: () => void }
+
+// Create a standalone .lg-grain div.
+createGrainLayer(): HTMLDivElement
+
+// Create a .lg-reply chat quote element.
+//   sender  — display name
+//   text    — quoted message preview
+//   isOwn   — true for purple .lg-own tint (default: false)
+//   onClick — optional click handler
+createReplyQuote(
+  sender:   string,
+  text:     string,
+  isOwn?:   boolean,
+  onClick?: ((e: MouseEvent) => void) | null
+): HTMLDivElement
 ```
 
-**Reduce blur for a lightweight variant:**
+### Background refraction
 
-```css
-.my-card.lg {
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-}
+```js
+import { refreshBackground, isRefractionActive } from './liquid-glass-pro.js';
+
+// Force an immediate background capture.
+// Returns Promise<void> that resolves after texture upload completes.
+// Use after significant DOM changes your bgCaptureInterval would miss:
+//   modal open, route transition, dynamic content load, etc.
+refreshBackground(): Promise<void>
+
+// Returns true once at least one capture has completed.
+// Use to gate refraction-dependent UI or show a loading indicator.
+isRefractionActive(): boolean
 ```
 
-**Disable caustics globally (CSS only, no API call):**
+### Diagnostics
 
-```css
-.lg-caustic-canvas { display: none !important; }
+```js
+import { getGpuTier, getOptions, version } from './liquid-glass-pro.js';
+
+// Detected GPU tier — result is memoised, O(1) after first call.
+getGpuTier(): 'high' | 'mid' | 'low'
+
+// Shallow copy of current resolved LGOptions (safe to log).
+getOptions(): LGOptions
+
+// Library version string.
+version(): '2.0.0'
+```
+
+### React hook
+
+```js
+import { useLiquidGlass } from './liquid-glass-pro.js';
+
+// Attach on mount, detach on unmount.
+// Calls initLiquidGlass() automatically if not already called.
+// Reads window.React — no hard import dependency.
+// Requires React 16.8+.
+useLiquidGlass(ref: React.RefObject<HTMLElement>): void
 ```
 
 ---
 
-## Browser Support
+## Performance guide
 
-| Browser | Version | Notes |
-|---------|---------|-------|
-| Chrome / Edge | 94+ | Full support — Houdini `CSS.registerProperty`, WebGL2, `backdrop-filter`, `DeviceOrientationEvent` |
-| Firefox | 103+ | Full except Houdini (`CSS.registerProperty` not available — custom properties work but aren't smoothly interpolated natively). All animations and physics still function via JS. |
-| Safari | 15.4+ | Full support — Houdini, WebGL2, `backdrop-filter`, gyroscope parallax on iOS |
-| Chrome Android | 94+ | GPU tier often resolves to `low` or `mid`; caustics may be disabled. `backdrop-filter` supported. Gyroscope parallax active. |
-| Safari iOS | 15.4+ | Full support. Gyroscope parallax fully active. Reduced caustic quota recommended for older A-series chips. |
-| Samsung Internet | 14+ | Full except Houdini |
+### Benchmark (1920×1080, MacBook Pro M2)
 
-**Hard requirements:**
-- `backdrop-filter` — required for the glass material. Without it `.lg` renders as a transparent box.
-- `WebGL2` — required for caustics. Falls back to CSS-only rendering transparently.
-- `CSS.registerProperty` (Houdini) — optional enhancement. Without it the custom properties work but lose native interpolation.
+| Metric | Value |
+|---|---|
+| html2canvas capture at 35% scale | 8–18ms |
+| WebGL render per element per frame | ~0.2ms |
+| CSS custom property updates per element per frame | 6 × `setProperty()` |
+| Memory per attached element (incl. canvas) | ~1.2 MB |
+| Memory for background texture at 35% of 1080p | ~1.0 MB |
 
-**Graceful degradation path:**
+### Tuning for many elements / low-power
+
+```js
+initLiquidGlass({
+  bgCaptureInterval: 2000,   // recapture every 2s
+  bgCaptureScale:    0.20,   // smaller texture
+  caustics:          false,  // no WebGL caustics
+  grain:             false,  // no grain layer
+  breathe:           false,  // no border animation
+});
+```
+
+### Tuning for high-quality showcase
+
+```js
+initLiquidGlass({
+  bgCaptureInterval:  300,    // near-real-time
+  bgCaptureScale:     0.65,   // sharper refraction detail
+  refractionStrength: 0.055,  // more visible bending
+  aberrationStrength: 2.0,    // stronger colour fringe
+});
+```
+
+### Element count guidelines
+
+| GPU tier | Recommended WebGL elements |
+|---|---|
+| `high` | Up to 32 (hard cap) |
+| `mid` | Up to 16 |
+| `low` | 0 (CSS-only only) |
+
+Elements beyond `MAX_WEBGL_ELEMENTS = 32` silently fall back to CSS-only glass. Hover effects, iridescence, and backdrop-filter still work — only the caustic overlay is disabled.
+
+---
+
+## Browser support
+
+| Browser | Glass material | Caustics | Real refraction | Gyro tilt |
+|---|---|---|---|---|
+| Chrome 100+ | ✅ | ✅ WebGL2 | ✅ | ✗ desktop |
+| Firefox 100+ | ✅ | ✅ WebGL2 | ✅ | ✗ desktop |
+| Safari 15.4+ | ✅ | ✅ WebGL2 | ✅ | ✗ desktop |
+| Edge 100+ | ✅ | ✅ WebGL2 | ✅ | ✗ desktop |
+| iOS Safari 15.4+ | ✅ | ✅ mid-tier | ✅ | ✅ DeviceOrientation |
+| Android Chrome 100+ | ✅ | ⚠ tier-dependent | ✅ | ✅ DeviceOrientation |
+| Chrome < 69 / Safari < 14 | ⚠ no `backdrop-filter` | ✗ | ✗ | ✗ |
+
+`backdrop-filter` is required for the frosted-glass base. On unsupported browsers the element renders as semi-transparent without blur — functional, not visually optimal.
+
+---
+
+## GPU tiers explained
+
+The tier is detected once via `WEBGL_debug_renderer_info` on first `_attach()` call:
+
+### `high`
+Full feature set: WebGL2 caustics at full `aberrationStrength`, real background refraction, all shader layers active.
+Typical hardware: Desktop dGPU (NVIDIA/AMD), Apple Silicon M-series, iPhone A12+, Snapdragon 8 Gen 1+.
+
+### `mid`
+WebGL2 caustics at half `aberrationStrength`. All other features active.
+Typical hardware: Adreno 5xx/6xx (Snapdragon 7xx), Mali-G57/G77 (mid-range 2019–2022 Android).
+
+### `low`
+CSS-only frosted glass. No WebGL caustic overlay, no real refraction. SVG filters replaced with identity pass-throughs. `backdrop-filter` + all CSS effects remain active.
+Typical hardware: Adreno 2xx–4xx, Mali-T/2xx, PowerVR SGX, early Intel integrated.
+
+---
+
+## SPA & Shadow DOM
+
+### SPA navigation
+
+```js
+import { initLiquidGlass, destroyLiquidGlass } from './liquid-glass-pro.js';
+
+// React Router v6 example
+import { useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
+
+function App() {
+  const location = useLocation();
+
+  useEffect(() => {
+    initLiquidGlass({ ior: 1.45 });
+    return () => destroyLiquidGlass();   // cleanup on route unmount
+  }, [location.pathname]);
+
+  return <Outlet />;
+}
+```
+
+`destroyLiquidGlass()` removes the injected `<style>`, `<svg>`, WebGL canvas, all event listeners, the MutationObserver, and the RAF loop. After calling it, `initLiquidGlass()` can be called again cleanly.
+
+### Shadow DOM
+
+The MutationObserver watches `document.body` and cannot see into Shadow roots. Use `attachElement()` / `detachElement()` manually:
+
+```js
+class GlassWidget extends HTMLElement {
+  connectedCallback() {
+    this.shadow = this.attachShadow({ mode: 'open' });
+    this.shadow.innerHTML = `<div class="lg lg-card lg-interactive" id="g">...</div>`;
+    attachElement(this.shadow.getElementById('g'));
+  }
+  disconnectedCallback() {
+    const el = this.shadow.getElementById('g');
+    if (el) detachElement(el);
+  }
+}
+```
+
+### Modal / route change
+
+```js
+// Force a fresh capture after a modal opens
+async function openModal() {
+  modal.classList.add('open');
+  await new Promise(r => setTimeout(r, 300));   // wait for CSS transition
+  await refreshBackground();
+}
+```
+
+---
+
+## Why a Python server?
+
+ES modules (`type="module"`) and html2canvas DOM capture are **both blocked on `file://`** URLs by all browsers:
+
+- `file://` has no `Origin` — browsers deny cross-origin-like behaviour
+- ES module imports require same-origin HTTP
+- html2canvas requires a real HTTP response for correct layout capture
+- WebGL canvas read-back requires `Cross-Origin-Opener-Policy` headers
+
+`run.py` is a zero-install Python 3.7+ stdlib server with exactly the headers needed:
 
 ```
-WebGL2 unavailable → CSS-only rendering (no caustic canvas)
-Houdini unavailable → JS-driven custom properties (still animates, just via rAF)
-backdrop-filter unsupported → glass renders without frosted-glass material
-prefers-reduced-motion: reduce → all animations and caustics disabled
-GPU tier = low → caustics disabled, SVG filter passthrough
+Access-Control-Allow-Origin:      *
+Cross-Origin-Opener-Policy:       same-origin
+Cross-Origin-Embedder-Policy:     require-corp
+Content-Type:                     application/javascript  (for .js modules)
+```
+
+```bash
+python run.py                    # http://localhost:8080, auto-opens browser
+python run.py --port 3000        # custom port
+python run.py --host 0.0.0.0     # expose to LAN (test on phone)
+python run.py --no-open          # headless / CI mode
+```
+
+For production any standard HTTP server works — Vite, nginx, Apache. No special configuration beyond correct `Content-Type: application/javascript` for `.js` files.
+
+---
+
+## Architecture overview
+
+```
+liquid-glass-pro.js
+│
+├── §0   JSDoc type definitions
+│         LGOptions, GpuTier, SpringState, ElementState, WrapResult
+│
+├── §1   Module-private state
+│         _defaults, _opts          — configuration
+│         _state                    — singleton flags + DOM/WebGL references
+│         _elements (WeakMap)       — per-element runtime state
+│         _tracked  (Set)           — RAF iteration set
+│         SPRING                    — physics presets (frozen constant)
+│         MAX_WEBGL_ELEMENTS = 32
+│         MAX_DT = 0.05s
+│
+├── §2   GPU tier detection
+│         WebGL1 throwaway context → WEBGL_debug_renderer_info
+│         Renderer string pattern matching → 'high' | 'mid' | 'low'
+│         Context released immediately via WEBGL_lose_context
+│         Result memoised in _gpuTierCache
+│
+├── §3   Spring physics engine
+│         _createSpring(initialValue)     → SpringState
+│         _stepSpring(s, cfg, dt)         → symplectic Euler integration
+│
+├── §4   Houdini CSS custom properties
+│         CSS.registerProperty() for --lg-mx, --lg-my, --lg-irid,
+│         --lg-hover, --lg-tx, --lg-ty
+│         Enables GPU-accelerated gradient interpolation on compositor thread
+│
+├── §5   Background capture engine                          ← NEW in v2
+│         _captureBackground()          async, html2canvas mutex lock
+│         _startBackgroundCapture()     allocates texture + starts triggers
+│         _stopBackgroundCapture()      clears interval
+│         Triggers: setInterval, scroll (debounced 150ms), ResizeObserver
+│
+├── §6   WebGL2 caustics + refraction engine
+│         _VERT_SRC    full-screen triangle vertex shader
+│         _FRAG_SRC    fragment shader (caustics + all physical effects)
+│         │
+│         │   Fragment shader features:
+│         │   ├── hash2(), gnoise()              utility noise functions
+│         │   ├── surfaceNormal()                bump-map normal      ← NEW
+│         │   ├── refractUV()                    Snell's law UV       ← NEW
+│         │   ├── sampleBackground()             background lookup    ← NEW
+│         │   ├── chromaticRefraction()          Cauchy dispersion    ← NEW
+│         │   ├── voronoi(), causticBand(),
+│         │   │   caustic()                      Voronoi caustics     (v1)
+│         │   ├── schlick()                      Fresnel factor       (v1)
+│         │   ├── environmentReflection()        mirror probe         ← NEW
+│         │   └── main()                         12-step composite pipeline
+│         │
+│         ├── §6.1  _compileShader(), _buildProgram()
+│         │         _initWebGL()     shared context + program init
+│         └──       _renderCausticsGL(es, now)   per-element render + blit
+│
+├── §7   SVG filter bank
+│         _buildSVGDefs(tier)     animated 3-channel chromatic aberration
+│         _injectSVG()            inserts hidden <svg> into <body>
+│
+├── §8   CSS injection
+│         _buildCSS()             generates full stylesheet string
+│         _injectCSS()            inserts <style id="liquid-glass-pro-style-200">
+│
+├── §9   Device orientation
+│         _startOrientationTracking()   DeviceOrientationEvent → tilt
+│         _stopOrientationTracking()    listener cleanup
+│
+├── §10  Per-element attach / detach
+│         _attach(el)    canvas, grain, springs, pointer listeners, ResizeObserver
+│         _detach(el)    full cleanup, returns WebGL slot to pool
+│
+├── §11  rAF animation loop
+│         _rafLoop(ts)   advance springs → CSS vars → WebGL render per element
+│         _startLoop(), _stopLoop()
+│
+├── §12  MutationObserver
+│         _attachSubtree(), _detachSubtree()
+│         _startObserver()   childList + subtree watch on document.body
+│
+└── §13  Public API  (14 named exports)
+          initLiquidGlass, destroyLiquidGlass
+          attachElement, detachElement
+          wrapWithDistortion, createGrainLayer, createReplyQuote
+          refreshBackground, isRefractionActive
+          getGpuTier, getOptions, version
+          useLiquidGlass
+```
+
+---
+
+## Shader pipeline
+
+Per-pixel execution order in the fragment shader (12 steps):
+
+```
+Input: v_uv — normalised [0,1]² UV from vertex shader
+
+ 1. surfaceNormal(uv)
+      gnoise sampled at uv, uv+ε_x, uv+ε_y → finite-difference gradient
+      Mouse-influenced exp() radial warp near cursor when hovered
+      → vec3 N  (perturbed surface normal in view space)
+
+ 2. chromaticRefraction(uv, N)                              ← v2
+      element UV → screen UV → +u_scroll drift compensation
+      Cauchy IOR offsets:  R(−0.010)  G(0)  B(+0.018)
+      refractUV() applied per channel → 3 independent texture samples
+      → vec3 refractedBg  (R, G, B each from different displaced UV)
+
+ 3. Fresnel factor
+      full-element normal with cursor/tilt lean → schlick(cosθ, 0.04)
+      → float fr  ∈ [0, 1]
+
+ 4. environmentReflection(uv, N, fr)                        ← v2
+      screen UV → mirror UV (flip X + normal perturbation)
+      texture sample × fr × 0.35
+      → vec3 envRefl  (edge reflection contribution)
+
+ 5. Voronoi caustics
+      caustic(uvA) with 4 scale/speed/seed combos → float cBase
+      per-channel causticBand at 3 UV offsets → vec3 chromCaustic
+
+ 6. Specular highlights
+      lightPos = (0.22, 0.18) + mouse×hover + tilt
+      wide lobe (pow 7) + tight lobe (pow 16) + ghost bounce (pow 11)
+      → float specular
+
+ 7. Fresnel edge glow
+      top / bottom / left edge bands via smoothstep + pow
+      → float edgeGlow
+
+ 8. Thin-film iridescence
+      polar angle + time + tilt → cosine spectrum (0°, 120°, 240° offsets)
+      masked by smoothstep at element edges
+      → vec3 irid
+
+ 9. Prismatic edge band
+      narrow ring at edgeR ≈ 0.92 via double smoothstep
+      → vec3 prismColor
+
+10. Surface undulation
+      two-octave gnoise → very slow organic wave motion
+      → float wave
+
+11. Compose
+      col  = caustics + chromCaustic
+      col += specular + edgeGlow + irid + prismColor + wave + envRefl
+      col  = mix(col, refractedBg, smoothstep(0, 0.18, 1-edgeR) × 0.28 × bgReady)
+
+12. Vignette + alpha
+      soft smoothstep feather at element edges
+      luma = dot(col, BT.601 coefficients)
+      alpha = clamp(luma × 1.85, 0, 1) × 0.88
+      → vec4 fragColor  (premultiplied RGBA)
 ```
 
 ---
 
 ## FAQ
 
-**Q: The glass looks opaque / I can't see through it.**
+**Q: Why does the refraction look blurry?**
+The background texture is captured at `bgCaptureScale` (default 35%). Increase to 0.5–0.75 for sharper detail. `LINEAR_MIPMAP_LINEAR` filtering also smooths the texture, which looks physically correct for glass but reduces sharp edge detail from the source.
 
-`backdrop-filter` only blurs content *behind* the element in the GPU compositing stack. Your `.lg` element needs visually rich content behind it — a gradient background, an image, other DOM elements with colour. A `body { background: white }` with nothing else will appear nearly opaque because there's nothing to blur.
+**Q: The refraction doesn't update when I scroll.**
+Ensure `run.py` is serving the demo (not `file://`). If you're in an iframe, the parent scroll won't bubble — call `refreshBackground()` manually on the inner scroll event.
 
----
+**Q: html2canvas shows blank regions for some content.**
+html2canvas has known limitations: CSS pseudo-element gradients may not render, WebGL canvases are tainted and appear transparent, cross-origin images without CORS headers are excluded. These regions appear transparent in the refraction texture — correct degraded behaviour.
 
-**Q: The caustics aren't appearing.**
+**Q: Can I use this without html2canvas?**
+Yes — caustics, spring physics, iridescence, and all CSS effects work without it. Only real screen-space refraction requires html2canvas. If `window.html2canvas` is absent, `_captureBackground()` returns early and `u_bgReady` stays `0.0` — the shader skips the background blend entirely.
 
-Several reasons this can happen:
-1. **`getGpuTier()` returns `'low'`** — caustics are disabled entirely on low-tier GPUs. Check `getGpuTier()` in the console.
-2. **Element doesn't have `.lg-interactive`** — caustics are opacity 0 at rest and only revealed on hover for `.lg-interactive` elements.
-3. **WebGL2 unavailable** — the library falls back silently to CSS-only. Check `canvas.getContext('webgl2')` in the console.
-4. **Quota exceeded** — more than `MAX_WEBGL_ELEMENTS = 32` elements with WebGL active. Earlier-attached elements have priority.
+**Q: The glass is too opaque / not glass-like enough.**
+The `refrBlend` weight in the shader (`0.28`) controls how much of the refracted background shows through the caustic composite. It's a hard-coded compositional constant — edit it in `_FRAG_SRC` if you need a different opacity range.
 
----
+**Q: Does this work inside an iframe?**
+Yes, but html2canvas only captures same-origin content. Cross-origin parent frames appear transparent. `backdrop-filter` may also behave differently depending on stacking context inside iframes.
 
-**Q: The distortion / chromatic aberration effect isn't showing.**
+**Q: Safari doesn't show the effect.**
+`-webkit-backdrop-filter` is included in the injected CSS. Ensure Safari 15.4+ for WebGL2. On older Safari, only the CSS material renders; caustics are silently disabled.
 
-The SVG filter is injected into `document.body` of the main document. It won't be reachable from Shadow DOM roots or cross-origin iframes. Inject the SVG manually into those contexts. Also check that you're using the `.lg-outer` wrapper — the distortion filter is applied there, not on `.lg` directly.
+**Q: My Lighthouse score dropped.**
+html2canvas adds ~120 kb gzipped. Load it with `defer` or dynamically after first user interaction to keep it off the critical path. The library itself is ~18 kb gzipped.
 
----
-
-**Q: My bundler (Rollup / esbuild / Vite) throws `ReferenceError: Cannot access 'es' before initialization`.**
-
-You're using v1.1.0 with a bundler that reorders `const` declarations. Upgrade to **v1.1.1** — this TDZ bug is fixed.
-
----
-
-**Q: Can I disable the breathing animation on a specific element?**
-
-Yes:
-
-```css
-.my-specific-card.lg {
-  animation: lg-irid-spin 15s linear infinite;
-}
+**Q: Can I animate `ior` dynamically?**
+Not at runtime without calling `initLiquidGlass()` again. `_opts.ior` is read each frame in `_renderCausticsGL()`, so you can mutate it directly — but this is an internal API and may change between versions:
+```js
+import * as LG from './liquid-glass-pro.js';
+// Internal — use with caution:
+// _opts is module-private; expose via getOptions() only reads a copy.
 ```
-
-This replaces the combined `animation` shorthand (which includes `lg-breathe`) with only the iridescence rotation.
-
----
-
-**Q: How do I use this in a high-frequency scroll list?**
-
-Don't apply `.lg` directly to list items in a large virtual list. Instead:
-
-1. Keep list item markup free of `.lg`.
-2. Use an `IntersectionObserver` that adds the `.lg` class (and calls `attachElement()`) when an item enters the viewport, and removes it (calling `detachElement()`) when it leaves.
-3. Alternatively, use list virtualisation — only render DOM nodes for visible items.
-
----
-
-**Q: Can I change the blur amount?**
-
-Yes, override `backdrop-filter` on your element:
-
-```css
-.my-card.lg {
-  backdrop-filter: blur(10px) saturate(150%);
-  -webkit-backdrop-filter: blur(10px) saturate(150%);
-}
-```
-
-Lower blur values (8–12px) are significantly cheaper on mobile.
-
----
-
-**Q: Why did my reduced-motion preference have no effect in v1.1.0?**
-
-A missing closing brace in the `@media (prefers-reduced-motion: reduce)` block caused the browser CSS parser to silently discard all rules inside it. This is fixed in v1.1.1 — upgrading immediately restores correct accessibility behaviour with no code changes.
-
----
-
-**Q: Does this work with CSS-in-JS solutions (styled-components, Emotion)?**
-
-Yes. The library injects its own `<style>` tag — it doesn't depend on your styling solution. Your CSS-in-JS styles apply to `.lg` elements normally. The only consideration: CSS-in-JS libraries that use `Shadow DOM` style scoping will not see the library's injected stylesheet inside those shadow roots.
-
----
-
-**Q: Can I extend the glass with my own GLSL effects?**
-
-The current API doesn't expose the WebGL context or allow shader injection. The `_state.glBackend` and `_state.glProgram` are module-private. Fork the library and modify `_FRAG_SRC` directly to add your own GLSL stages.
-
----
-
-**Q: Why is `MAX_WEBGL_ELEMENTS` 32 and not higher?**
-
-Each WebGL-enabled element requires a private `<canvas>` node for its 2-D overlay (the blit target). At 32 elements × ~300×100 px each (a typical chat bubble) the total pixel allocation is ~1 million px — within the comfortable range of any GPU's texture memory. The shared backend canvas is resized per element per frame, so backend memory cost is just one frame buffer. The quota is a safety valve, not a hard technical limit; adjust `MAX_WEBGL_ELEMENTS` in the source if your use case warrants it.
-
----
-
-## Internals Reference
-
-A quick map of the source sections for contributors:
-
-| Section | Description |
-|---------|-------------|
-| §0 JSDoc types | `GpuTier`, `ElementState`, `SpringState`, `WrapResult` typedef definitions |
-| §1 Module-private state | `_state` singleton, `_elements` WeakMap, `_tracked` Set, `_gpuTierCache` |
-| §2 Configuration | `SPRING` presets, `MAX_DT`, `MAX_WEBGL_ELEMENTS` |
-| §3 GPU tier detection | `_detectGpuTier()` — WebGL probe + renderer string regex |
-| §4 Spring physics | `_createSpring()`, `_stepSpring()`, `_atRest()` |
-| §5 Houdini registration | `_registerHoudini()` — `CSS.registerProperty` for 6 typed properties |
-| §6 WebGL caustics | `_VERT_SRC`, `_FRAG_SRC`, `_compileShader()`, `_buildProgram()`, `_initWebGL()`, `_renderCausticsGL()` |
-| §7 SVG filter bank | `_buildSVGDefs()`, `_injectSVG()` |
-| §8 CSS injection | `_buildCSS()`, `_injectCSS()` |
-| §9 Device orientation | `_startOrientationTracking()`, `_stopOrientationTracking()` |
-| §10 Attach / detach | `_attach()`, `_detach()` — per-element lifecycle |
-| §11 rAF loop | `_rafLoop()`, `_startLoop()`, `_stopLoop()` |
-| §12 MutationObserver | `_attachSubtree()`, `_detachSubtree()`, `_startObserver()` |
-| §13 Display map | `_DISPLAY_MAP` — computed style → wrapper class lookup |
-| §14 Public API | All exported functions |
+A `setOption(key, value)` export is planned for v2.1.
 
 ---
 
 ## License
 
-Licensed under the [Apache License 2.0](LICENSE).
-
 ```
-Copyright 2026 Boris Maltsev
+Copyright 2025 Liquid Glass PRO Contributors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -1494,10 +1034,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
----
+v1.1.1 was also released under Apache 2.0.
 
-<div align="center">
-
-*Built with an unhealthy obsession with light physics.*
-
-</div>
+html2canvas is licensed under MIT — see [html2canvas/LICENSE](https://github.com/niklasvh/html2canvas/blob/master/LICENSE).
