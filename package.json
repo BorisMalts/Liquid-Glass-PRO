@@ -18,5 +18,5 @@
     "glass", "liquid-glass", "webgl", "css", "refraction",
     "caustics", "frosted-glass", "backdrop-filter", "ui"
   ],
-  "license": "MIT"
+  "license": "Apache 2.0"
 }
