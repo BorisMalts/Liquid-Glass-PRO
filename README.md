@@ -2,8 +2,10 @@
 
 > The browser's most physically accurate glass effect. Real Snell's law refraction, Voronoi caustics, spring physics, and iridescence — all in a single zero-framework JS file.
 
+![Screenshot 2026-03-05 at 15 09 19](https://github.com/user-attachments/assets/7cd030bf-b4a7-479a-83ae-bccd678e2d72)
+
 ![Version](https://img.shields.io/badge/version-2.0.0-a084f0?style=flat-square)
-![Light](https://img.shields.io/badge/prev-v1.1.1-6366f1?style=flat-square&logo=github)
+![Previous](https://img.shields.io/badge/prev-v1.1.1-6366f1?style=flat-square&logo=github)
 ![WebGL2](https://img.shields.io/badge/WebGL2-required%20for%20caustics-4f46e5?style=flat-square)
 ![License](https://img.shields.io/badge/license-Apache%202.0-22c55e?style=flat-square)
 ![Dependencies](https://img.shields.io/badge/dependencies-1%20(html2canvas)-f59e0b?style=flat-square)
