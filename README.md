@@ -57,30 +57,6 @@
 
 ---
 
-## What it beats from competitors
-
-| Capability | **This library** | liquidGL | RealGlass | Apple Liquid Glass |
-|---|---|---|---|---|
-| Real screen refraction | ✅ html2canvas | ✅ html2canvas | ✅ html2canvas | ✅ Metal framebuffer |
-| Voronoi caustics | ✅ WebGL2 GLSL | ✗ | ✗ | ✗ |
-| Thin-film iridescence | ✅ | ✗ | ✗ | ✗ |
-| Prismatic edge caustics | ✅ | ✗ | ✗ | ✗ |
-| Spring physics | ✅ mass / damping / stiffness | partial | ✗ | UIKit spring |
-| Cauchy IOR dispersion | ✅ per R/G/B channel | ✗ | ✗ | ✗ |
-| Environment reflection probe | ✅ Fresnel-weighted | ✗ | ✗ | ✅ |
-| Bump-map surface normals | ✅ gradient noise | ✗ | ✗ | ✅ Metal |
-| Device orientation (gyro) | ✅ → 3D tilt springs | ✗ | ✗ | ✅ |
-| GPU tier adaptive | ✅ high / mid / low | ✗ | ✗ | ✅ |
-| Dependency footprint | **1** (html2canvas ~120 kb) | html2canvas | html2canvas + p5.js | OS-level Metal |
-| Zero memory leaks | ✅ WeakMap + cleanup API | ⚠ partial | ✗ | N/A |
-| SPA cleanup API | ✅ `destroyLiquidGlass()` | ✗ | ✗ | N/A |
-| SSR safe | ✅ | ✗ | ✗ | N/A |
-| Houdini typed CSS properties | ✅ | ✗ | ✗ | N/A |
-
-**Where Apple wins:** Direct Metal framebuffer access (no html2canvas overhead), native OS integration, true ray-traced reflections, compositor-thread performance. This library is a different tool — it runs in any browser, requires no native code, and adds several physical effects Apple's implementation omits (Voronoi caustics, chromatic dispersion, iridescence).
-
----
-
 ## Quick start
 
 ```bash
