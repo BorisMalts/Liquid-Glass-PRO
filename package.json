@@ -1,0 +1,22 @@
+{
+  "name": "liquid-glass-pro",
+  "version": "2.0.0",
+  "description": "Ultra-premium Liquid Glass rendering library with real screen-space refraction via html2canvas + WebGL2",
+  "type": "module",
+  "main": "liquid-glass-pro.js",
+  "exports": {
+    ".": "./liquid-glass-pro.js"
+  },
+  "scripts": {
+    "dev":   "python run.py",
+    "start": "python run.py --no-open"
+  },
+  "dependencies": {
+    "html2canvas": "^1.4.1"
+  },
+  "keywords": [
+    "glass", "liquid-glass", "webgl", "css", "refraction",
+    "caustics", "frosted-glass", "backdrop-filter", "ui"
+  ],
+  "license": "MIT"
+}
