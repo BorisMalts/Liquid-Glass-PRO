@@ -63,8 +63,8 @@
 
 ```bash
 # Clone the project
-git clone https://github.com/your-org/liquid-glass-pro
-cd liquid-glass-pro
+git clone https://github.com/BorisMalts/Liquid-Glass-PRO
+cd Liquid-Glass-PRO
 
 # Install the only dependency (html2canvas)
 npm install
