@@ -997,7 +997,7 @@ A `setOption(key, value)` export is planned for v2.1.
 ## License
 
 ```
-Copyright 2025 Liquid Glass PRO Contributors
+Copyright 2026 Boris Maltsev
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.

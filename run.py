@@ -132,7 +132,7 @@ def main():
         try:
             webbrowser.open(url)
         except Exception:
-            pass  # silently skip if no browser available (CI, headless, etc.)
+            pass
 
     try:
         server.serve_forever()
