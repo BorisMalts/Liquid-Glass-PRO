@@ -1,93 +1,35 @@
-// =============================================================================
-// @fileoverview liquid-glass-pro.js  ·  v 2.0.0
+// liquid-glass-pro.js · v2.0.1
 //
-// ┌─────────────────────────────────────────────────────────────────────────┐
-// │          Ultra-premium «Liquid Glass PRO» rendering library             │
-// │                                                                         │
-// │  Brings physically-based, real-time glass rendering to the web via a    │
-// │  layered architecture:                                                  │
-// │    1. WebGL2 caustic simulation (Voronoi + Snell refraction)            │
-// │    2. html2canvas screen-space background capture → GPU texture         │
-// │    3. CSS backdrop-filter + SVG chromatic distortion fallback           │
-// │    4. Spring-physics pointer dynamics                                   │
-// │    5. Houdini CSS custom property animations                            │
-// └─────────────────────────────────────────────────────────────────────────┘
+// glass rendering for the web, built on top of webgl2 + css backdrop-filter.
 //
-// ┌─────────────────────────────────────────────────────────────────────────┐
-// │  NEW in v2.0.0  (compared to v1.1.1)                                   │
-// ├─────────────────────────────────────────────────────────────────────────┤
-// │  ★  Real screen-space refraction                                        │
-// │       html2canvas captures the page at reduced resolution, the result   │
-// │       is uploaded as a WebGL2 sampler2D uniform and sampled at UV       │
-// │       coordinates displaced according to Snell's law.                  │
-// │                                                                         │
-// │  ★  Physical Snell's law refraction (IOR-based)                         │
-// │       delta_uv ≈ (n1/n2 − 1) · normal.xy · thickness                  │
-// │       rather than a naive blur / offset approach.                       │
-// │                                                                         │
-// │  ★  Dynamic background updates                                          │
-// │       Background texture is refreshed on scroll (debounced 150 ms),    │
-// │       on resize (ResizeObserver on <body>), and on a configurable       │
-// │       periodic interval (default 600 ms).                               │
-// │                                                                         │
-// │  ★  Normal-map surface detail                                           │
-// │       Per-pixel surface normals are derived from animated gradient      │
-// │       noise, simulating spatially-varying glass thickness.              │
-// │                                                                         │
-// │  ★  Environment reflection probe                                        │
-// │       At grazing angles the Fresnel factor exceeds the transmission     │
-// │       factor; the background is sampled at the mirrored UV to simulate  │
-// │       a cheap planar reflection probe.                                  │
-// │                                                                         │
-// │  ★  Configurable options object                                         │
-// │       IOR, refraction strength, aberration strength, capture interval,  │
-// │       resolution scale, and feature toggles are all user-configurable.  │
-// │                                                                         │
-// │  ★  React / Vue / Svelte adapters                                       │
-// │       Exported useLiquidGlass() React hook and composable pattern.      │
-// │                                                                         │
-// │  ★  SSR-safe                                                            │
-// │       No DOM access occurs at import time; all side-effects are         │
-// │       deferred until initLiquidGlass() is called.                      │
-// └─────────────────────────────────────────────────────────────────────────┘
+// how it works:
+//   1. html2canvas captures the page at reduced resolution → uploads to webgl2 texture
+//   2. fragment shader displaces uvs using surface normals (snell's law approximation)
+//   3. svg feDisplacementMap handles chromatic aberration at the wrapper level
+//   4. spring physics drives cursor tracking and device tilt
+//   5. houdini css custom properties animate the specular highlight
 //
-// ┌─────────────────────────────────────────────────────────────────────────┐
-// │  Retained from v1.1.1                                                  │
-// ├─────────────────────────────────────────────────────────────────────────┤
-// │  ★  WebGL2 Voronoi caustic simulation                                   │
-// │  ★  Spring-physics cursor dynamics                                      │
-// │  ★  Per-channel chromatic dispersion                                    │
-// │  ★  Schlick Fresnel edge glow                                           │
-// │  ★  Thin-film iridescence                                               │
-// │  ★  Prismatic edge caustics                                             │
-// │  ★  Liquid border morphing (breathing animation)                        │
-// │  ★  Device orientation parallax (gyroscope tilt)                        │
-// │  ★  Adaptive GPU quality tiers (low / mid / high)                       │
-// │  ★  Houdini CSS custom properties (CSS.registerProperty)                │
-// │  ★  Zero memory leaks — full cleanup API via destroyLiquidGlass()       │
-// └─────────────────────────────────────────────────────────────────────────┘
+// what's new in v2.0.1:
+//   - screen-space background refraction via html2canvas → sampler2D
+//   - per-channel cauchy dispersion (different ior per rgb)
+//   - environment reflection probe at grazing angles (fresnel-weighted)
+//   - animated normal map from gradient noise
+//   - react hook (useLiquidGlass), vue composable and svelte action patterns
+//   - ssr-safe: no dom access at import time
 //
-// ┌─────────────────────────────────────────────────────────────────────────┐
-// │  External Dependencies                                                  │
-// ├─────────────────────────────────────────────────────────────────────────┤
-// │  html2canvas ^1.4.1 — renders the live DOM to an HTMLCanvasElement.     │
-// │  Must be loaded before initLiquidGlass() is called; available as        │
-// │  window.html2canvas after a standard <script> tag inclusion.            │
-// └─────────────────────────────────────────────────────────────────────────┘
+// note: refraction is a snapshot, not a live compositor feed.
+// html2canvas will fail on cross-origin content (iframes, cdn images, external fonts).
 //
-// ┌─────────────────────────────────────────────────────────────────────────┐
-// │  Quick-start                                                            │
-// ├─────────────────────────────────────────────────────────────────────────┤
-// │  import { initLiquidGlass } from './liquid-glass-pro.js';              │
-// │  initLiquidGlass({ ior: 1.5, refractionStrength: 0.04 });              │
-// │                                                                         │
-// │  <!-- HTML -->                                                          │
-// │  <div class="lg lg-card lg-interactive">Hello, glass!</div>             │
-// └─────────────────────────────────────────────────────────────────────────┘
+// depends on html2canvas ^1.4.1 — must be loaded before initLiquidGlass() is called.
 //
-// @version  2.0.0
-// @license  Apache 2.0
-// =============================================================================
+// quick start:
+//   import { initLiquidGlass } from './liquid-glass-pro.js'
+//   initLiquidGlass({ ior: 1.5, refractionStrength: 0.04 })
+//
+//   <div class="lg lg-card lg-interactive">hello</div>
+//
+// license: apache 2.0
+
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,8 +203,8 @@ const _defaults = {
     ior:                 1.45,   // soda-lime glass is ~1.52; slightly lower for subtlety
     refractionStrength:  0.035,  // UV displacement scale; tuned empirically
     aberrationStrength:  1.6,    // px magnitude of SVG feDisplacementMap on high tier
-    bgCaptureInterval:   600,    // ms — balance freshness vs. html2canvas overhead
-    bgCaptureScale:      0.35,   // 35% linear scale → ~8× pixel reduction
+    bgCaptureInterval:   50,    // ms — balance freshness vs. html2canvas overhead
+    bgCaptureScale:      0.65,   // 65% linear scale → ~8× pixel reduction
     caustics:            true,
     grain:               true,
     iridescence:         true,
@@ -3151,9 +3093,9 @@ export function getOptions() { return { ..._opts }; }
 /**
  * Returns the semantic version string of this module build.
  *
- * @returns {'2.0.0'}
+ * @returns {'2.0.1'}
  */
-export function version() { return '2.0.0'; }
+export function version() { return '2.0.1'; }
 
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
 
 ![Screenshot 2026-03-05 at 15 09 19](https://github.com/user-attachments/assets/7cd030bf-b4a7-479a-83ae-bccd678e2d72)
 
-![Version](https://img.shields.io/badge/version-2.0.0-a084f0?style=flat-square)
+![Version](https://img.shields.io/badge/version-2.0.1-a084f0?style=flat-square)
 ![Previous](https://img.shields.io/badge/prev-v1.1.1-6366f1?style=flat-square&logo=github)
 ![WebGL2](https://img.shields.io/badge/WebGL2-required%20for%20caustics-4f46e5?style=flat-square)
 ![License](https://img.shields.io/badge/license-Apache%202.0-22c55e?style=flat-square)
@@ -132,7 +132,7 @@ Add `class="lg"` to any element. Combine with variant classes:
     ior:                 1.45,   // index of refraction  (1.0 = air, 1.5 = glass)
     refractionStrength:  0.035,  // UV displacement magnitude
     aberrationStrength:  1.6,    // SVG chromatic aberration px (high GPU tier)
-    bgCaptureInterval:   600,    // ms between background recaptures
+    bgCaptureInterval:   50,    // ms between background recaptures
     bgCaptureScale:      0.35,   // capture resolution = 35% of screen (fast)
     caustics:            true,   // WebGL Voronoi caustic simulation
     grain:               true,   // film grain overlay
@@ -246,7 +246,7 @@ The library checks `typeof window` at every internal DOM access — it will neve
 │                                                                      │
 │  ┌─────────────────────────────────────────────────────────────┐     │
 │  │  html2canvas renders document.documentElement               │     │
-│  │  at bgCaptureScale = 35%  (default)                         │     │
+│  │  at bgCaptureScale = 65%  (default)                         │     │
 │  │                                                             │     │
 │  │  1920 × 1080 screen  →  672 × 378 capture canvas            │     │
 │  │  ~8× fewer pixels than full-res → 8–25ms on modern laptop   │     │
@@ -292,7 +292,7 @@ The library checks `typeof window` at every internal DOM access — it will neve
 │                             ▼                                        │
 │  ┌─────────────────────────────────────────────────────────────┐     │
 │  │  Recapture triggers:                                        │     │
-│  │    • setInterval every bgCaptureInterval ms (default 600)   │     │
+│  │    • setInterval every bgCaptureInterval ms (default 50)    │     │
 │  │    • window 'scroll' debounced at 150ms                     │     │
 │  │    • ResizeObserver on document.body                        │     │
 │  └─────────────────────────────────────────────────────────────┘     │
@@ -412,7 +412,7 @@ initLiquidGlass({
   // High GPU tier: full value. Mid tier: ×0.5. Low tier: filter disabled.
   // Keep ≤ 2.0 to avoid "zebra stripe" artefacts on text content.
 
-  bgCaptureInterval: 600,
+  bgCaptureInterval: 50,
   // Milliseconds between periodic html2canvas background recaptures.
   //   200–400ms   for fast-changing UIs (video, live data feeds)
   //   600ms       balanced default

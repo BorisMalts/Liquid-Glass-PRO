@@ -475,7 +475,7 @@
         <div class="card-content">
           <div class="card-icon">⚡</div>
           <div class="card-title">Adaptive Recapture</div>
-          <div class="card-desc">Background texture refreshes on scroll, resize, and every 600 ms. Previous frame stays visible — zero flicker.</div>
+          <div class="card-desc">Background texture refreshes on scroll, resize, and every 50 ms. Previous frame stays visible — zero flicker.</div>
         </div>
       </div>
     </div>
@@ -554,8 +554,8 @@
     ior:                1.45,
     refractionStrength: 0.045,   // stronger so photo bending is obvious
     aberrationStrength: 1.6,
-    bgCaptureInterval:  600,
-    bgCaptureScale:     0.35,
+    bgCaptureInterval:  50,
+    bgCaptureScale:     0.65,
     caustics:           true,
     grain:              true,
     iridescence:        true,
