@@ -210,6 +210,8 @@ const _defaults = {
     iridescence:         true,
     breathe:             true,
     selector:            '.lg',
+    glassOpacity:    0.12,   // base white tint
+    glassSaturation: 100,    // backdrop-filter saturation %
 };
 
 /**
@@ -1938,18 +1940,18 @@ function _buildCSS() {
     background:
         radial-gradient(
             ellipse 48% 34% at var(--lg-mx) var(--lg-my),
-            rgba(255,255,255,0.16)  0%,
-            rgba(255,255,255,0.05) 48%,
+            rgba(255,255,255,0.08)  0%,
+            rgba(255,255,255,0.02) 48%,
             transparent            68%
         ),
-        rgba(255,255,255,0.032);
+        rgba(255,255,255,0.06);
 
     /* ── Backdrop filter ───────────────────────────────────────────────────  */
     /* blur(26px)      — softens background through glass                     */
     /* saturate(175%)  — increases colour vibrancy of background              */
     /* brightness(1.1) — makes glass feel luminous / bright                   */
-    backdrop-filter:         blur(26px) saturate(175%) brightness(1.10);
-    -webkit-backdrop-filter: blur(26px) saturate(175%) brightness(1.10);
+    backdrop-filter:         blur(12px) saturate(110%) brightness(1.06);
+    -webkit-backdrop-filter: blur(12px) saturate(110%) brightness(1.06);
 
     /* ── Box shadow stack (7 layers) ──────────────────────────────────────── */
     /* Layer 1: top inner white highlight (bright glass rim at top)           */
@@ -2142,8 +2144,7 @@ function _buildCSS() {
             rgba(255,255,255,0.10) 38%,
             transparent            63%
         ),
-        rgba(255,255,255,0.060);
-
+        rgba(255,255,255,0.025);
     box-shadow:
         inset  0  2px  0   rgba(255,255,255,0.55),
         inset  1px 0   0   rgba(255,255,255,0.24),
