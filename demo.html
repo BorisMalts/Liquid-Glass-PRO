@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Liquid Glass PRO · v4.0.0 Demo</title>
+    <title>Liquid Glass PRO · v4.1.0 Demo</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -203,7 +203,7 @@
         .btn-outline:hover { color: var(--text); background: rgba(255,255,255,.09); }
         .pills {
             display: flex; flex-wrap: wrap; gap: 10px;
-            justify-content: center; max-width: 680px;
+            justify-content: center; max-width: 720px;
         }
         .scroll-hint {
             display: flex; flex-direction: column; align-items: center; gap: 9px;
@@ -243,7 +243,7 @@
             background: linear-gradient(to bottom, transparent, rgba(255,255,255,.11), transparent);
         }
 
-        /* ── Glass selector ───────────────────────────────────────────── */
+        /* ── Glass type selector ──────────────────────────────────────── */
         .glass-selector {
             display: flex; gap: 9px; flex-wrap: wrap;
             justify-content: center; max-width: 680px;
@@ -271,6 +271,35 @@
         }
         .glass-btn.active::before { opacity: 1; }
         .glass-btn .abbe { display: block; font-size: 9px; opacity: .5; margin-top: 2px; letter-spacing: .04em; }
+
+        /* ── Glass variant selector ───────────────────────────────────── */
+        .variant-selector {
+            display: flex; gap: 8px; flex-wrap: wrap;
+            justify-content: center; max-width: 760px;
+        }
+        .variant-btn {
+            display: flex; flex-direction: column; align-items: center;
+            padding: 11px 16px; min-width: 80px;
+            font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
+            letter-spacing: .05em; text-transform: uppercase;
+            color: var(--text-dim); cursor: pointer;
+            background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07);
+            border-radius: 10px; transition: all .22s cubic-bezier(.34,1.56,.64,1);
+            position: relative; overflow: hidden; text-align: center;
+        }
+        .variant-btn .v-swatch {
+            width: 22px; height: 22px; border-radius: 50%;
+            margin-bottom: 6px; flex-shrink: 0;
+            border: 1px solid rgba(255,255,255,.15);
+        }
+        .variant-btn .v-name  { font-size: 10px; line-height: 1.2; }
+        .variant-btn .v-ior   { font-size: 8.5px; opacity: .42; margin-top: 2px; }
+        .variant-btn:hover    { color: var(--text-mid); border-color: rgba(255,255,255,.18); transform: translateY(-1px); }
+        .variant-btn.active   {
+            color: #fff; border-color: rgba(196,168,255,.5);
+            background: rgba(196,168,255,.10);
+            box-shadow: 0 0 20px -6px rgba(196,168,255,.32);
+        }
 
         /* ── Showcase card ────────────────────────────────────────────── */
         .showcase-card { padding: 40px 36px; text-align: center; width: 100%; max-width: 500px; }
@@ -302,6 +331,20 @@
         .disp-fill.b { background: linear-gradient(90deg, #60a5fa, #a78bfa); }
         .disp-val { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-dim); width: 50px; text-align: right; flex-shrink: 0; }
 
+        /* ── Variant showcase ─────────────────────────────────────────── */
+        .variant-showcase {
+            display: grid; grid-template-columns: 1fr 1fr;
+            gap: 14px; max-width: 640px; width: 100%;
+        }
+        @media (max-width: 500px) { .variant-showcase { grid-template-columns: 1fr; } }
+        .variant-demo-card { padding: 30px 24px; text-align: center; }
+        .variant-demo-label {
+            font-family: var(--font-mono); font-size: 9px; letter-spacing: .11em;
+            text-transform: uppercase; color: rgba(255,255,255,.3); margin-bottom: 10px;
+        }
+        .variant-demo-name { font-family: var(--font-serif); font-size: 1.6rem; margin-bottom: 8px; }
+        .variant-demo-desc { font-size: .82rem; color: var(--text-dim); line-height: 1.58; font-weight: 300; }
+
         /* ── Cards ────────────────────────────────────────────────────── */
         .demo-cards {
             display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -326,6 +369,7 @@
         .tag-v2  { background: rgba(196,168,255,.12); color: #c4b5fd; }
         .tag-v1  { background: rgba(99,102,241,.12);  color: #a5b4fc; }
         .tag-v3  { background: rgba(251,191,36,.11);  color: #fcd34d; }
+        .tag-v41 { background: rgba(251,113,133,.12); color: #fda4af; }
         .compare-name { font-weight: 700; font-size: .93rem; margin-bottom: 7px; }
         .compare-desc { font-size: .815rem; color: var(--text-dim); line-height: 1.55; font-weight: 300; }
 
@@ -388,7 +432,7 @@
 
 <!-- ── Debug panel ──────────────────────────────────────────────────────── -->
 <div class="debug-panel">
-    <div class="row"><span class="key">LG-PRO</span>     <span class="val">v4.0.0</span></div>
+    <div class="row"><span class="key">LG-PRO</span>     <span class="val">v4.1.0</span></div>
     <div class="sep"></div>
     <div class="row"><span class="key">GPU Tier</span>   <span class="val" id="dbGpu">—</span></div>
     <div class="row"><span class="key">Refraction</span> <span class="val" id="dbRefract">pending…</span></div>
@@ -396,6 +440,7 @@
     <div class="row"><span class="key">Elements</span>   <span class="val" id="dbCount">0</span></div>
     <div class="sep"></div>
     <div class="row"><span class="key">Glass</span>      <span class="val" id="dbGlass">BK7</span></div>
+    <div class="row"><span class="key">Variant</span>    <span class="val" id="dbVariant">clear</span></div>
     <div class="row"><span class="key">IOR (green)</span><span class="val" id="dbIor">1.5187</span></div>
     <div class="row"><span class="key">Δn R→B</span>     <span class="val" id="dbDn">0.0110</span></div>
     <div class="sep"></div>
@@ -415,15 +460,15 @@
     <section class="hero">
         <div class="hero-badge">
             <span class="dot"></span>
-            Sellmeier · PCG2D Voronoi · F2−F1 · 6 Octaves · v4.0.0
+            Sellmeier · PCG2D Voronoi · F2−F1 · 12 Variants · v4.1.0
         </div>
 
         <h1 class="hero-title">Liquid Glass<br><em>PRO</em></h1>
 
         <p class="hero-sub">
             Five real optical glasses from the Schott catalogue.
-            Sellmeier dispersion replaces Cauchy. PCG2D-hashed Voronoi with
-            domain warping and F2−F1 distance fields replaces sin()-based F1.
+            Twelve physically-based surface variants — frosted, mirror, ice, obsidian and more.
+            Sellmeier dispersion, Beer-Lambert chromatic absorption, PCG2D Voronoi.
         </p>
 
         <div class="hero-actions">
@@ -433,13 +478,15 @@
 
         <div class="pills">
             <span class="lg lg-pill lg-interactive">Sellmeier Dispersion</span>
+            <span class="lg lg-pill lg-interactive">12 Glass Variants</span>
+            <span class="lg lg-pill lg-interactive">Beer-Lambert</span>
+            <span class="lg lg-pill lg-interactive">Frosted Scatter</span>
+            <span class="lg lg-pill lg-interactive">Mirror Boost</span>
             <span class="lg lg-pill lg-interactive">PCG2D Voronoi</span>
             <span class="lg lg-pill lg-interactive">F2−F1 Caustics</span>
             <span class="lg lg-pill lg-interactive">Domain Warping</span>
-            <span class="lg lg-pill lg-interactive">5 Glass Types</span>
             <span class="lg lg-pill lg-interactive">Spring Physics</span>
             <span class="lg lg-pill lg-interactive">Snell Refraction</span>
-            <span class="lg lg-pill lg-interactive">Iridescence</span>
         </div>
 
         <div class="scroll-hint">
@@ -447,6 +494,103 @@
             Scroll to explore
         </div>
     </section>
+
+
+    <!-- ── GLASS VARIANTS ─────────────────────────────────────────────────────── -->
+    <section class="section">
+        <div class="section-eyebrow">New in v4.1.0</div>
+        <h2 class="section-title">Glass surface variants</h2>
+        <p class="section-sub">
+            Twelve physically-based glass characters. Beer-Lambert chromatic absorption,
+            frosted scatter refraction, mirror Fresnel boost and smoke density —
+            all derived from real optical physics.
+        </p>
+
+        <!-- Variant selector -->
+        <div class="variant-selector" id="variantSwitcher">
+            <button class="variant-btn active" data-variant="clear">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(255,255,255,.35),rgba(200,230,255,.12))"></span>
+                <span class="v-name">Clear</span>
+                <span class="v-ior">IOR 1.45</span>
+            </button>
+            <button class="variant-btn" data-variant="frosted">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(255,255,255,.6),rgba(220,230,255,.3))"></span>
+                <span class="v-name">Frosted</span>
+                <span class="v-ior">IOR 1.47</span>
+            </button>
+            <button class="variant-btn" data-variant="smoke">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(90,95,110,.8),rgba(30,32,42,.9))"></span>
+                <span class="v-name">Smoke</span>
+                <span class="v-ior">IOR 1.52</span>
+            </button>
+            <button class="variant-btn" data-variant="tinted-blue">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(80,160,255,.7),rgba(20,60,180,.8))"></span>
+                <span class="v-name">Blue</span>
+                <span class="v-ior">IOR 1.47</span>
+            </button>
+            <button class="variant-btn" data-variant="tinted-violet">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(160,80,255,.7),rgba(80,20,200,.8))"></span>
+                <span class="v-name">Violet</span>
+                <span class="v-ior">IOR 1.49</span>
+            </button>
+            <button class="variant-btn" data-variant="tinted-amber">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(255,200,40,.8),rgba(200,100,10,.7))"></span>
+                <span class="v-name">Amber</span>
+                <span class="v-ior">IOR 1.53</span>
+            </button>
+            <button class="variant-btn" data-variant="mirror">
+                <span class="v-swatch" style="background:linear-gradient(135deg,#e8eef8,#b0c0d8,#e8eef8)"></span>
+                <span class="v-name">Mirror</span>
+                <span class="v-ior">IOR 1.785</span>
+            </button>
+            <button class="variant-btn" data-variant="ice">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(210,240,255,.85),rgba(160,210,255,.6))"></span>
+                <span class="v-name">Ice</span>
+                <span class="v-ior">IOR 1.309</span>
+            </button>
+            <button class="variant-btn" data-variant="bronze">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(200,130,40,.8),rgba(130,70,15,.8))"></span>
+                <span class="v-name">Bronze</span>
+                <span class="v-ior">IOR 1.58</span>
+            </button>
+            <button class="variant-btn" data-variant="emerald">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(40,200,90,.75),rgba(10,110,40,.8))"></span>
+                <span class="v-name">Emerald</span>
+                <span class="v-ior">IOR 1.575</span>
+            </button>
+            <button class="variant-btn" data-variant="rose">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(255,120,160,.7),rgba(200,50,100,.7))"></span>
+                <span class="v-name">Rose</span>
+                <span class="v-ior">IOR 1.46</span>
+            </button>
+            <button class="variant-btn" data-variant="obsidian">
+                <span class="v-swatch" style="background:radial-gradient(circle,rgba(50,35,80,.9),rgba(10,8,20,.95))"></span>
+                <span class="v-name">Obsidian</span>
+                <span class="v-ior">IOR 1.49</span>
+            </button>
+        </div>
+
+        <!-- Live variant showcase -->
+        <div class="variant-showcase">
+            <div class="lg lg-card lg-interactive variant-demo-card" id="variantCard1">
+                <div class="variant-demo-label" id="variantLabel">Clear · Soda-lime float glass</div>
+                <div class="variant-demo-name" id="variantName">Crystal Clear</div>
+                <div class="variant-demo-desc" id="variantDesc">
+                    Maximum background transmission. Minimal tint. IOR 1.45 — soda-lime float glass. Sharp Sellmeier caustics.
+                </div>
+            </div>
+            <div class="lg lg-card lg-interactive variant-demo-card" id="variantCard2">
+                <div class="variant-demo-label">Hover to interact</div>
+                <div class="variant-demo-name">Feel the physics</div>
+                <div class="variant-demo-desc">
+                    Each variant applies Beer-Lambert absorption, frosted scatter,
+                    mirror Fresnel boost and smoke density — all in real GLSL.
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="divider"></div>
 
 
     <!-- ── GLASS TYPE SELECTOR ────────────────────────────────────────────────── -->
@@ -611,9 +755,9 @@
                 <div class="card-desc">Replaces Cauchy with exact Schott B/C coefficients. Three resonance terms: UV electronic, near-UV secondary, far-IR phonon lattice. RMS error &lt;0.0001.</div>
             </div>
             <div class="lg lg-card lg-interactive card-inner">
-                <span class="card-icon">⚗️</span>
-                <div class="card-title">5 Optical Glass Types</div>
-                <div class="card-desc">BK7 · SF11 (crystal) · N-FK51A (APO) · N-BK10 (window) · F2 (vintage). Each with physically accurate Abbe number and per-channel IOR for RGB primaries.</div>
+                <span class="card-icon">🎨</span>
+                <div class="card-title">12 Glass Variants</div>
+                <div class="card-desc">Clear · Frosted · Smoke · Blue · Violet · Amber · Mirror · Ice · Bronze · Emerald · Rose · Obsidian. Each with physically-derived Beer-Lambert absorption coefficients.</div>
             </div>
             <div class="lg lg-card lg-interactive card-inner">
                 <span class="card-icon">✦</span>
@@ -687,20 +831,20 @@
         <div class="section-eyebrow">Complete capability list</div>
         <h2 class="section-title">All features</h2>
         <div class="feature-grid">
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">Sellmeier Dispersion</div><div class="feature-desc">Schott catalogue B/C coefficients. RMS error &lt;0.0001 across visible range.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">5 Glass Types</div><div class="feature-desc">BK7 · SF11 · N-FK51A · N-BK10 · F2. Switchable at runtime without reinit.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">PCG2D Voronoi Hash</div><div class="feature-desc">Jarzynski & Olano (2020). No lattice bias, period 2³² per axis.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">F2−F1 Distance Field</div><div class="feature-desc">Sharp caustic filaments at cell boundaries. Eliminates cell-centre pillow artefact.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">Domain Warping</div><div class="feature-desc">gnoise pre-distorts UV before Voronoi. Breaks square lattice at all scales.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">6 Caustic Octaves</div><div class="feature-desc">+2 vs v3. 11.25° rotation stagger per octave eliminates star-burst alignment.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">Physical Chromatic Caustics</div><div class="feature-desc">RGB split derived from Sellmeier Δn — scales automatically with glass type.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-new">v4 NEW</div><div class="feature-name">F0 from Sellmeier</div><div class="feature-desc">Fresnel reflectance at normal incidence derived from n_G, not fixed 0.04.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-v3">v3</div><div class="feature-name">GGX-Inspired Specular</div><div class="feature-desc">Three-lobe NDF approximation — subtle at rest, emerges on hover.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-v3">v3</div><div class="feature-name">specularStrength / Whiteness</div><div class="feature-desc">Controls specular intensity and colour warmth independently.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-v3">v3</div><div class="feature-name">glassOpacity / Saturation</div><div class="feature-desc">White tint and backdrop saturation — from pure refraction to frosted.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-v41">v4.1 NEW</div><div class="feature-name">12 Glass Variants</div><div class="feature-desc">Clear · Frosted · Smoke · Tinted × 3 · Mirror · Ice · Bronze · Emerald · Rose · Obsidian.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-v41">v4.1 NEW</div><div class="feature-name">Beer-Lambert Absorption</div><div class="feature-desc">I = I₀·exp(−σ·d) per RGB channel. σ derived from tintRGB colorant absorption.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-v41">v4.1 NEW</div><div class="feature-name">Frosted Scatter</div><div class="feature-desc">Multi-scale noise UV jitter approximates sub-surface scatter in ground glass.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-v41">v4.1 NEW</div><div class="feature-name">Mirror Fresnel Boost</div><div class="feature-desc">Amplifies environmentReflection() and raises F0 toward 1 for silver-surface mirror.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-v41">v4.1 NEW</div><div class="feature-name">Smoke Density</div><div class="feature-desc">Uniform broadband darkening post Beer-Lambert. Models soot/magnetite inclusion absorption.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-v41">v4.1 NEW</div><div class="feature-name">Per-Variant Caustic Tint</div><div class="feature-desc">RGB tint applied to caustic layer — ice caustics blue, amber warm, obsidian purple.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-new">v4</div><div class="feature-name">Sellmeier Dispersion</div><div class="feature-desc">Schott catalogue B/C coefficients. RMS error &lt;0.0001 across visible range.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-new">v4</div><div class="feature-name">5 Glass Types</div><div class="feature-desc">BK7 · SF11 · N-FK51A · N-BK10 · F2. Switchable at runtime without reinit.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-new">v4</div><div class="feature-name">PCG2D Voronoi Hash</div><div class="feature-desc">Jarzynski & Olano (2020). No lattice bias, period 2³² per axis.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-new">v4</div><div class="feature-name">F2−F1 Distance Field</div><div class="feature-desc">Sharp caustic filaments at cell boundaries. Eliminates cell-centre pillow artefact.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-new">v4</div><div class="feature-name">Domain Warping</div><div class="feature-desc">gnoise pre-distorts UV before Voronoi. Breaks square lattice at all scales.</div></div>
+            <div class="lg feature-item"><div class="feature-tag tag-new">v4</div><div class="feature-name">6 Caustic Octaves</div><div class="feature-desc">+2 vs v3. 11.25° rotation stagger per octave eliminates star-burst alignment.</div></div>
             <div class="lg feature-item"><div class="feature-tag tag-v2">v2</div><div class="feature-name">Screen-Space Refraction</div><div class="feature-desc">html2canvas → WebGL2 texture → Snell's law UV displacement per pixel.</div></div>
             <div class="lg feature-item"><div class="feature-tag tag-v2">v2</div><div class="feature-name">Reflection Probe</div><div class="feature-desc">Fresnel-weighted horizontal mirror sample at grazing incidence.</div></div>
-            <div class="lg feature-item"><div class="feature-tag tag-v2">v2</div><div class="feature-name">Scroll Compensation</div><div class="feature-desc">Drift correction between capture and render — zero flicker on scroll.</div></div>
             <div class="lg feature-item"><div class="feature-tag tag-v1">v1</div><div class="feature-name">Spring Physics</div><div class="feature-desc">Mass/damping/stiffness model — 5 springs per element, cursor and tilt.</div></div>
             <div class="lg feature-item"><div class="feature-tag tag-v1">v1</div><div class="feature-name">Thin-Film Iridescence</div><div class="feature-desc">Born & Wolf interference at element edges — λR/λG/λB phase offsets.</div></div>
             <div class="lg feature-item"><div class="feature-tag tag-v1">v1</div><div class="feature-name">GPU Tier Adaptive</div><div class="feature-desc">High/mid/low quality tiers with graceful CSS fallback on low-end hardware.</div></div>
@@ -716,7 +860,7 @@
 <script type="module">
     import {
         initLiquidGlass, getGpuTier, isRefractionActive,
-        createReplyQuote, refreshBackground, setGlassType
+        createReplyQuote, refreshBackground, setGlassType, setGlassVariant
     } from './liquid-glass-pro.js';
 
     // ── Sellmeier per-channel IOR lookup table ─────────────────────────────────
@@ -753,26 +897,42 @@
         },
     };
 
+    // ── Variant metadata for UI ────────────────────────────────────────────────
+    const VARIANTS = {
+        'clear':        { label: 'Clear · Soda-lime float glass',         name: 'Crystal Clear',   desc: 'Maximum background transmission. Minimal tint. IOR 1.45 — soda-lime float glass. Sharp Sellmeier caustics, crisp edges.' },
+        'frosted':      { label: 'Frosted · Ground-glass surface scatter', name: 'Frosted',         desc: 'Heavy scatter completely diffuses the refracted image. Simulates sub-surface scatter in sandblasted or etched glass. 40px blur.' },
+        'smoke':        { label: 'Smoke · Neutral-density tint film',      name: 'Smoked',          desc: 'Dark automotive / architectural tint. Beer-Lambert: uniform σ across R/G/B → neutral-density absorption. IOR 1.52.' },
+        'tinted-blue':  { label: 'Tinted Blue · Cobalt silicate glass',    name: 'Cobalt Blue',     desc: 'Beer-Lambert: σR=3.1, σG=1.8, σB=0.2 → strong red/green absorption. Caustic tint maps to vivid blue-cyan filaments.' },
+        'tinted-violet':{ label: 'Tinted Violet · UV-filter / amethyst',   name: 'Amethyst',        desc: 'Absorbs green (trough at 550nm), passes R+B → purple. UV-filter glass or amethyst crystal. Caustic tint = vivid violet.' },
+        'tinted-amber': { label: 'Tinted Amber · Fe²⁺/S²⁻ amber glass',  name: 'Cognac Amber',    desc: 'Strong blue absorption (σB=4.2), minimal R/G → warm glow. Historically UV-protective pharmaceutical / spirits bottles.' },
+        'mirror':       { label: 'Mirror · Silver first-surface coating',  name: 'Mirror',          desc: 'IOR 1.785 = SF11 flint → F0 ≈ 0.079. mirrorStrength=0.92 collapses transmission. Sharp specular caustic flares.' },
+        'ice':          { label: 'Ice · H₂O polycrystalline (Warren 2008)','name': 'Polar Ice',     desc: 'IOR = 1.309 (Warren & Brandt 2008, 550nm, T=−10°C). Frosted 0.42 simulates grain-boundary scatter. Cold blue caustics.' },
+        'bronze':       { label: 'Bronze · Copper dichroic filter',        name: 'Bronze',          desc: 'Absorbs blue strongly, passes R+G at different rates. IOR 1.58. Warm copper-bronze caustic tint. Mirror 0.16.' },
+        'emerald':      { label: 'Emerald · Cr³⁺-doped beryl glass',       name: 'Emerald',         desc: 'IOR 1.575. Cr³⁺ absorption at 430nm and 610nm creates the green transmission window near 500–570nm.' },
+        'rose':         { label: 'Rose · Mn-doped cranberry glass',        name: 'Rose Quartz',     desc: 'Manganese-doped silicate: absorbs 490–580nm (green), passes red+blue. IOR 1.46. Soft rose-quartz caustics.' },
+        'obsidian':     { label: 'Obsidian · Volcanic rhyolitic glass',    name: 'Obsidian',        desc: 'Near-black: strong broadband absorption from Fe²⁺/Fe³⁺/magnetite inclusions. IOR 1.49. Polished mirror component.' },
+    };
+
     // ── Init ───────────────────────────────────────────────────────────────────
-    initLiquidGlass({ glassType: 'BK7' });
+    initLiquidGlass({ glassType: 'BK7', glassVariant: 'clear' });
 
     document.getElementById('replyZone').appendChild(
         createReplyQuote(
-            'v4.0.0 — Sellmeier + PCG2D Voronoi',
-            'Select a glass type above to change dispersion physics in real time',
+            'v4.1.0 — Variants + Beer-Lambert',
+            'Select a glass variant above to change the surface character in real time',
             false, null
         )
     );
 
-    // ── Glass switcher ─────────────────────────────────────────────────────────
-    let currentGlass = 'BK7';
+    // ── Glass type switcher ────────────────────────────────────────────────────
+    let currentGlass   = 'BK7';
+    let currentVariant = 'clear';
 
     function applyGlass(type) {
         if (currentGlass === type) return;
         currentGlass = type;
         const d = GLASS[type];
 
-        // Patch live option — liquid-glass-pro.js reads _LG_opts.glassType on next frame
         setGlassType(type);
 
         document.querySelectorAll('.glass-btn').forEach(b =>
@@ -781,17 +941,15 @@
 
         document.getElementById('showcaseType').textContent = d.label;
         document.getElementById('showcaseDesc').textContent = d.desc;
-
         document.getElementById('iorR').textContent = d.iorR;
         document.getElementById('iorG').textContent = d.iorG;
         document.getElementById('iorB').textContent = d.iorB;
-
         document.getElementById('barR').style.width = d.barR + '%';
         document.getElementById('barG').style.width = d.barG + '%';
         document.getElementById('barB').style.width = d.barB + '%';
-        document.getElementById('valR').textContent  = d.iorR;
-        document.getElementById('valG').textContent  = d.iorG;
-        document.getElementById('valB').textContent  = d.iorB;
+        document.getElementById('valR').textContent = d.iorR;
+        document.getElementById('valG').textContent = d.iorG;
+        document.getElementById('valB').textContent = d.iorB;
 
         document.getElementById('dbGlass').textContent = type;
         document.getElementById('dbIor').textContent   = d.iorG;
@@ -801,9 +959,33 @@
         refreshBackground();
     }
 
+    // ── Glass variant switcher ────────────────────────────────────────────────
+    function applyVariant(variant) {
+        currentVariant = variant;
+        const v = VARIANTS[variant];
+
+        setGlassVariant(variant);
+
+        document.querySelectorAll('.variant-btn').forEach(b =>
+            b.classList.toggle('active', b.dataset.variant === variant)
+        );
+
+        document.getElementById('variantLabel').textContent = v.label;
+        document.getElementById('variantName').textContent  = v.name;
+        document.getElementById('variantDesc').textContent  = v.desc;
+        document.getElementById('dbVariant').textContent    = variant;
+
+        refreshBackground();
+    }
+
     document.getElementById('glassSwitcher').addEventListener('click', e => {
         const btn = e.target.closest('.glass-btn');
         if (btn) applyGlass(btn.dataset.type);
+    });
+
+    document.getElementById('variantSwitcher').addEventListener('click', e => {
+        const btn = e.target.closest('.variant-btn');
+        if (btn) applyVariant(btn.dataset.variant);
     });
 
     // ── Debug updater ──────────────────────────────────────────────────────────

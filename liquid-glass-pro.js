@@ -1,4 +1,4 @@
-// liquid-glass-pro.js · v4.0.0
+// liquid-glass-pro.js · v4.1.0
 //
 // Physically-based liquid glass rendering for the web, built on WebGL2 + CSS backdrop-filter.
 //
@@ -33,6 +33,52 @@
 //   7. Houdini CSS custom properties (--lg-mx, --lg-my, --lg-tx …) are written
 //      every rAF frame, enabling smooth browser-native CSS transitions.
 //
+//   8. Twelve glass surface variants (clear · frosted · smoke · tinted-blue ·
+//      tinted-violet · tinted-amber · mirror · ice · bronze · emerald · rose ·
+//      obsidian) define physical optical character via Beer-Lambert absorption,
+//      Fresnel F0, scatter amount, and per-variant caustic tinting — all driven
+//      by GLSL uniforms uploaded per frame, switchable at runtime without reinit.
+//
+// ── What's new in v4.1.0 ──────────────────────────────────────────────────────
+//
+//   Glass Variant System
+//     Twelve physically-grounded surface presets derived from real optical
+//     constants (Schott catalogue 2023, Warren & Brandt 2008, Palik 1998).
+//     Each variant encodes: IOR · Beer-Lambert tintRGB · tintStrength · frosted ·
+//     mirror · smokeDensity · causticScale · causticTint · blurPx · CSS overrides.
+//     Switch at runtime: setGlassVariant('obsidian') takes effect in one rAF frame.
+//
+//   Beer-Lambert chromatic absorption  (§H2)
+//     Per-channel absorption: σ_ch = (1 − tintRGB_ch) · tintStrength · 3.5
+//     Applied to refracted background before caustic compositing so tinted-glass
+//     caustic filaments appear in the glass's own hue.
+//
+//   Frosted scatter refraction  (§H3)
+//     Multi-scale noise UV jitter (11× + 27× frequency, independent drift axes)
+//     approximates sub-surface scattering in ground glass.  Three-tap average
+//     simulates the scatter lobe integral.  Blended with sharp refraction by
+//     frostedAmount so partial frost gives a continuous haze gradient.
+//
+//   Mirror reflection mode  (§12 composition pass)
+//     u_mirrorStrength collapses transmission (refractedBg · (1−mirror·0.92))
+//     and amplifies environmentReflection() by a factor of up to 6.5×.
+//     IOR 1.785 (SF11) yields F0 ≈ 0.079 — 2× standard glass — for crisp Fresnel.
+//
+//   Smoke density uniform  (§12 composition pass)
+//     Broadband post-composite darkening: col *= (1 − smokeDensity · 0.68).
+//     Simulates Fe²⁺/Fe³⁺ absorption not captured by the Beer-Lambert tint term.
+//
+//   CSS variant override layer  (§8)
+//     Each variant class (.lg-v-clear … .lg-v-obsidian) overrides backdrop-filter
+//     and background gradient for accurate first-frame appearance before the WebGL
+//     pass renders.  Hover/active states per variant class.
+//
+//   _buildSpecularCSS() refactored into §16
+//     CSS fallback specular geometry analytically derived from GGX NDF α=0.04,
+//     anisotropy=0.35: three lobes (GGX peak, fill shoulder, back-scatter) with
+//     colours matching L0/L1/L2 from §15.K.  Thin-film CSS fallback phase offsets
+//     derived from Born & Wolf OPD equation at FILM_THICKNESS=320 nm.
+//
 // ── What's new in v4.0.0 ──────────────────────────────────────────────────────
 //
 //   Sellmeier dispersion replaces Cauchy approximation
@@ -62,9 +108,40 @@
 //     Per-channel RGB caustic UV offset is now derived from the Sellmeier Δn
 //     of the active glass type — SF11 shows 3.7× wider spectral splitting than BK7.
 //
-//   Fresnel F0 derived from Sellmeier n(550 nm) — was the fixed constant 0.04 in v3.
+//   Full Cook-Torrance PBR specular pass  (§15)
+//     Dedicated .lg-specular-canvas per element, rendered by a shared WebGL2
+//     context.  Anisotropic GGX NDF + Smith height-correlated visibility +
+//     Schlick Fresnel + Kulla-Conty multi-bounce + thin-film iridescence.
+//     Three area lights with Karis (2013) representative-point roughness modification.
+//
+//   Fresnel F0 derived from Sellmeier n(550 nm) — was fixed constant 0.04 in v3.
 //   getOptions() returns a live reference — glass type can be changed at runtime
 //   without calling destroyLiquidGlass() / initLiquidGlass() again.
+//
+// ── Render loop frame budget  (at 60 fps, high-tier GPU) ────────────────────
+//
+//   Every frame     Spring integration (5 springs × N elements) + CSS writes
+//   Every 2 frames  Caustic WebGL pass          (~30 fps, imperceptible at these frequencies)
+//   Every frame     Specular WebGL pass          (60 fps, cursor tracking requires full rate)
+//   Every 8 frames  domRect refresh              (~7.5 Hz, avoids layout thrash)
+//   Every 30 frames data-lg-refract attr sync    (~2 Hz, CSS only, no urgency)
+//   Idle / scroll   html2canvas background capture  (debounced 150 ms on scroll)
+//
+// ── Degradation tiers ────────────────────────────────────────────────────────
+//
+//   high  — desktop + Apple Silicon: full feature set, max aberration,
+//            background refraction, 6-octave caustics, PBR specular
+//   mid   — Adreno 5xx/6xx, Mali-G57/G75: caustics + specular,
+//            chromatic aberration at ½ strength, no background refraction
+//   low   — legacy mobile (Adreno 2xx-4xx, Mali-2/4, PowerVR SGX):
+//            CSS-only (backdrop-filter + SVG no-op stubs), no WebGL
+//
+// ── IntersectionObserver viewport gate ──────────────────────────────────────
+//
+//   Off-screen elements are excluded from all GPU work entirely.
+//   The IO fires at threshold:0 so the gate activates the moment any pixel
+//   of a tracked element enters or leaves the viewport, with no root margin.
+//   This eliminates GPU cost for glass elements scrolled out of view.
 //
 // ── Limitations ───────────────────────────────────────────────────────────────
 //
@@ -81,10 +158,16 @@
 //
 // ── Quick start ───────────────────────────────────────────────────────────────
 //
-//   import { initLiquidGlass, setGlassType, refreshBackground } from './liquid-glass-pro.js'
+//   import {
+//     initLiquidGlass,
+//     setGlassType,
+//     setGlassVariant,
+//     refreshBackground,
+//   } from './liquid-glass-pro.js'
 //
 //   initLiquidGlass({
-//     glassType:          'BK7',   // 'BK7' | 'SF11' | 'NK51A' | 'NBK10' | 'F2'
+//     glassType:          'BK7',      // 'BK7' | 'SF11' | 'NK51A' | 'NBK10' | 'F2'
+//     glassVariant:       'clear',    // see GLASS_VARIANTS for all 12 options
 //     ior:                1.45,
 //     refractionStrength: 0.035,
 //     bgCaptureInterval:  2000,
@@ -92,9 +175,69 @@
 //
 //   <div class="lg lg-card lg-interactive">hello, glass</div>
 //
-//   // Switch glass type at runtime — no reinitialisation required:
-//   setGlassType('SF11')    // heavy flint — vivid rainbow splitting
-//   refreshBackground()     // immediate re-capture with new IOR values
+//   // Switch glass material and variant at runtime — no reinit required:
+//   setGlassType('SF11')             // heavy flint — vivid rainbow splitting
+//   setGlassVariant('tinted-amber')  // cobalt-amber Beer-Lambert absorption
+//   setGlassVariant('obsidian')      // near-black, volcanic glass, purple sheen
+//   refreshBackground()              // immediate re-capture with new IOR values
+//
+// ── Module structure ──────────────────────────────────────────────────────────
+//
+//   §0   JSDoc type definitions
+//   §1   Module-level state + Glass Variant presets (GLASS_VARIANTS)
+//   §2   GPU tier detection (_detectGpuTier)
+//   §3   Spring physics (semi-implicit Euler)
+//   §4   Houdini CSS custom properties
+//   §5   Background capture engine (html2canvas → WebGL2 texture)
+//   §6   WebGL2 caustics + Sellmeier refraction render engine
+//          §6.0  GLSL source strings (_VERT_SRC, _FRAG_SRC)
+//            §A  Hash functions (hash2, pcg2, pcg2f)
+//            §B  Gradient noise (gnoise)
+//            §C  Sellmeier dispersion + per-channel IOR
+//            §D  Improved Voronoi caustic system (F2−F1, domain warp, PCG2D)
+//            §E  Surface normal (animated bump map)
+//            §F  Snell's law UV refraction
+//            §G  Background sampling + chromatic refraction
+//            §H  Schlick Fresnel
+//            §H2 Beer-Lambert chromatic transmission
+//            §H3 Frosted glass scatter refraction
+//            §I  Environment reflection probe
+//            §J  Main fragment program + composition pass
+//          §6.1  WebGL2 helper functions (_compileShader, _buildProgram, _initWebGL)
+//   §7   SVG filter bank (chromatic aberration + micro-distortion)
+//   §8   CSS injection (_buildCSS, _injectCSS)
+//   §9   Device orientation tracking (gyroscope tilt parallax)
+//   §10  Per-element attachment / detachment (_attach, _detach)
+//   §11  requestAnimationFrame render loop
+//   §12  MutationObserver — automatic element discovery
+//   §13  Public API (initLiquidGlass, destroyLiquidGlass, setGlassType,
+//                    setGlassVariant, getGlassVariants, refreshBackground, …)
+//   §14  React hook adapter (useLiquidGlass) + Vue/Svelte patterns
+//   §15  Cook-Torrance PBR specular pass
+//          §15.0  Constants (GLASS_IOR, GLASS_F0, FILM_THICKNESS, BASE_ROUGHNESS)
+//          §15.1  GLSL fragment shader (_SPEC_FRAG_SRC)
+//            §15.A  Surface normal + tangent frame (buildFrame)
+//            §15.B  GGX isotropic NDF (D_GGX)
+//            §15.C  Anisotropic GGX NDF (D_GGX_aniso, Burley 2012)
+//            §15.D  Schlick Fresnel with exact F0 from IOR
+//            §15.E  Smith height-correlated visibility (Heitz 2014)
+//            §15.F  Anisotropic Smith-GGX visibility
+//            §15.G  Kulla-Conty multi-bounce energy compensation (2017)
+//            §15.H  Thin-film iridescence (Born & Wolf 1999)
+//            §15.I  Area light representative-point approximation (Karis 2013)
+//            §15.J  Full Cook-Torrance BRDF evaluation
+//            §15.K  Three-light configuration (L0 cursor · L1 fill · L2 back)
+//            §15.L  Vignette + alpha derivation
+//            §15.M  Main
+//          §15.1  WebGL2 init (initSpecularPass, _buildKullaContyLUT)
+//          §15.2  Per-element canvas attachment (attachSpecularCanvas)
+//          §15.3  Per-frame render (renderSpecularGL)
+//          §15.4  CSS for specular canvas layer (buildSpecularCSS)
+//          §15.5  Teardown (destroySpecularPass)
+//   §16  _buildSpecularCSS() — CSS fallback + hover amplification
+//          §16.A  Fallback specular ::before (GGX-derived ellipse geometry)
+//          §16.B  Hover box-shadow amplification (synced to L0 × 1.5)
+//          §16.C  Specular canvas transitions + thin-film CSS fallback
 //
 // ── License ───────────────────────────────────────────────────────────────────
 //
@@ -296,6 +439,12 @@ const _defaults = {
     //   High V → low dispersion (colours stay together)
     //   Low  V → high dispersion (strong rainbow fringing)
     glassType:            'BK7',
+    // ── §v4.1  Glass Variant System ──────────────────────────────────────────
+    // Controls the physical character of the glass surface beyond optical type.
+    // Values: 'clear' | 'frosted' | 'smoke' | 'tinted-blue' | 'tinted-violet'
+    //       | 'tinted-amber' | 'mirror' | 'ice' | 'bronze' | 'emerald'
+    //       | 'rose' | 'obsidian'
+    glassVariant:  'clear',
 };
 
 /**
@@ -407,6 +556,307 @@ const MAX_WEBGL_ELEMENTS = 32;
  * then restored, which would produce a single enormous dt.
  */
 const MAX_DT = 0.05;  // 50 ms cap → equivalent to a ~20 fps minimum
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §1.5  Glass variant presets  (new in v4.1.0)
+//
+//  Each variant defines the complete optical + visual character of a glass
+//  surface type.  Parameters map directly to the GLSL uniforms introduced
+//  in §6.2 of the fragment shader.
+//
+//  Physical basis:
+//    tintRGB        — Beer-Lambert absorption: σ = (1−tintRGB) · tintStrength · 3.5
+//                     I = I₀ · exp(−σ · d)   (d = glass thickness ≈ 1.0)
+//    frosted        — Rough-surface scatter: adds multi-scale noise UV jitter
+//                     to the refraction lookup, simulating sub-surface scattering
+//                     in ground glass or sandblasted surfaces.
+//    mirror         — Amplifies environmentReflection() term + raises F0 toward 1.
+//    smokeDensity   — Uniform darkening after Beer-Lambert (soot/carbon absorption).
+//    causticScale   — Per-variant intensity of the Voronoi caustic composite.
+//    causticTint    — RGB colour multiplication applied to the caustic layer,
+//                     making ice caustics blue, amber caustics warm, etc.
+//    blurPx         — backdrop-filter blur in px (CSS, not GLSL).
+//    saturate       — backdrop-filter saturate % (CSS).
+//    brightness     — backdrop-filter brightness multiplier (CSS).
+//    bgTint         — CSS rgba() string for the background gradient tint.
+//
+//  IOR notes:
+//    ice     1.309 — published optical constant for H₂O ice (Warren 2008)
+//    emerald 1.575 — mid-point of emerald IOR range 1.565–1.602
+//    obsidian 1.49 — volcanic obsidian (SiO₂-rich rhyolite glass)
+//    SF11    1.785 — used for mirror (maximum Fresnel F0 in catalogue)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @typedef {Object} GlassVariantDef
+ * @property {string}   label
+ * @property {string}   cssClass
+ * @property {number}   ior
+ * @property {[r,g,b]}  tintRGB        Linear RGB 0..1
+ * @property {number}   tintStrength   0..1
+ * @property {number}   frosted        0..1 scatter amount
+ * @property {number}   mirror         0..1 mirror boost
+ * @property {number}   smokeDensity   0..1 uniform darkening
+ * @property {number}   causticScale   Caustic intensity multiplier
+ * @property {[r,g,b]}  causticTint    RGB tint for caustics
+ * @property {number}   blurPx         CSS backdrop-filter blur
+ * @property {number}   saturate       CSS backdrop-filter saturate %
+ * @property {number}   brightness     CSS backdrop-filter brightness
+ * @property {string}   bgTint         CSS rgba() for background gradient
+ */
+
+const GLASS_VARIANTS = Object.freeze({
+
+    // ── 1. Clear ──────────────────────────────────────────────────────────────
+    // Near-invisible glass: maximum background transmission, minimal tint.
+    // IOR 1.45 = soda-lime float glass, slight Δn, crisp caustics.
+    clear: {
+        label:        'Clear',
+        cssClass:     'lg-v-clear',
+        ior:          1.45,
+        tintRGB:      [1.00, 1.00, 1.00],
+        tintStrength: 0.00,
+        frosted:      0.00,
+        mirror:       0.00,
+        smokeDensity: 0.00,
+        causticScale: 0.80,
+        causticTint:  [1.00, 1.00, 1.00],
+        blurPx:       7,
+        saturate:     155,
+        brightness:   1.08,
+        bgTint:       'rgba(255,255,255,0.04)',
+    },
+
+    // ── 2. Frosted ────────────────────────────────────────────────────────────
+    // Ground-glass / sandblasted surface.  Heavy scatter completely diffuses
+    // the refracted image, leaving only soft light bleed through the surface.
+    // backdrop-filter blur 40px approximates the sub-surface scatter MFP.
+    frosted: {
+        label:        'Frosted',
+        cssClass:     'lg-v-frosted',
+        ior:          1.47,
+        tintRGB:      [1.00, 1.00, 1.00],
+        tintStrength: 0.18,
+        frosted:      0.90,
+        mirror:       0.00,
+        smokeDensity: 0.00,
+        causticScale: 0.38,
+        causticTint:  [1.00, 1.00, 1.00],
+        blurPx:       40,
+        saturate:     78,
+        brightness:   1.16,
+        bgTint:       'rgba(255,255,255,0.20)',
+    },
+
+    // ── 3. Smoke ──────────────────────────────────────────────────────────────
+    // Dark smoked glass (automotive / architectural tint film).
+    // Beer-Lambert: uniform σ across R/G/B → neutral-density absorption.
+    // IOR 1.52 = standard commercial tinted float glass.
+    smoke: {
+        label:        'Smoke',
+        cssClass:     'lg-v-smoke',
+        ior:          1.52,
+        tintRGB:      [0.54, 0.57, 0.63],
+        tintStrength: 0.58,
+        frosted:      0.10,
+        mirror:       0.10,
+        smokeDensity: 0.52,
+        causticScale: 0.55,
+        causticTint:  [0.68, 0.70, 0.78],
+        blurPx:       16,
+        saturate:     58,
+        brightness:   0.66,
+        bgTint:       'rgba(18,20,28,0.52)',
+    },
+
+    // ── 4. Tinted Blue ────────────────────────────────────────────────────────
+    // Cobalt-blue architectural glass.
+    // Beer-Lambert: σR=3.1, σG=1.8, σB=0.2 → strong red/green absorption.
+    // Caustic tint maps absorption to vivid blue-cyan filaments.
+    'tinted-blue': {
+        label:        'Tinted Blue',
+        cssClass:     'lg-v-tinted-blue',
+        ior:          1.47,
+        tintRGB:      [0.10, 0.44, 1.00],
+        tintStrength: 0.38,
+        frosted:      0.00,
+        mirror:       0.04,
+        smokeDensity: 0.08,
+        causticScale: 1.05,
+        causticTint:  [0.22, 0.58, 1.00],
+        blurPx:       12,
+        saturate:     145,
+        brightness:   1.04,
+        bgTint:       'rgba(30,90,210,0.13)',
+    },
+
+    // ── 5. Tinted Violet ──────────────────────────────────────────────────────
+    // UV-filter glass / amethyst crystal.
+    // Beer-Lambert: absorbs G (trough at 550nm), passes R+B → purple.
+    'tinted-violet': {
+        label:        'Tinted Violet',
+        cssClass:     'lg-v-tinted-violet',
+        ior:          1.49,
+        tintRGB:      [0.58, 0.14, 1.00],
+        tintStrength: 0.42,
+        frosted:      0.00,
+        mirror:       0.06,
+        smokeDensity: 0.10,
+        causticScale: 1.10,
+        causticTint:  [0.62, 0.28, 1.00],
+        blurPx:       12,
+        saturate:     135,
+        brightness:   1.02,
+        bgTint:       'rgba(100,30,210,0.14)',
+    },
+
+    // ── 6. Tinted Amber ───────────────────────────────────────────────────────
+    // Amber / honey-gold / cognac glass.
+    // Beer-Lambert: strong B absorption (σB=4.2), minimal R/G → warm glow.
+    // Historically amber glass = UV-protective pharmaceutical / spirits bottles.
+    'tinted-amber': {
+        label:        'Tinted Amber',
+        cssClass:     'lg-v-tinted-amber',
+        ior:          1.53,
+        tintRGB:      [1.00, 0.64, 0.06],
+        tintStrength: 0.44,
+        frosted:      0.00,
+        mirror:       0.05,
+        smokeDensity: 0.06,
+        causticScale: 1.15,
+        causticTint:  [1.00, 0.76, 0.28],
+        blurPx:       11,
+        saturate:     148,
+        brightness:   1.07,
+        bgTint:       'rgba(220,130,20,0.13)',
+    },
+
+    // ── 7. Mirror ─────────────────────────────────────────────────────────────
+    // First-surface mirror coating (silver on glass).
+    // IOR 1.785 = SF11 flint → F0 ≈ 0.079 (2× standard glass).
+    // u_mirrorStrength = 0.92 collapses transmission, renders pure reflection.
+    // Caustics become sharp specular flares.
+    mirror: {
+        label:        'Mirror',
+        cssClass:     'lg-v-mirror',
+        ior:          1.785,
+        tintRGB:      [0.90, 0.93, 0.96],
+        tintStrength: 0.08,
+        frosted:      0.00,
+        mirror:       0.92,
+        smokeDensity: 0.00,
+        causticScale: 1.50,
+        causticTint:  [0.94, 0.96, 1.00],
+        blurPx:       3,
+        saturate:     125,
+        brightness:   1.18,
+        bgTint:       'rgba(220,228,240,0.08)',
+    },
+
+    // ── 8. Ice ────────────────────────────────────────────────────────────────
+    // Polycrystalline water ice.
+    // IOR = 1.309 (Warren & Brandt 2008, 550nm, T=–10°C).
+    // Frosted 0.40 simulates polycrystalline grain-boundary scatter.
+    // Caustic tint = cold blue — ice acts as a natural UV-pass filter.
+    ice: {
+        label:        'Ice',
+        cssClass:     'lg-v-ice',
+        ior:          1.309,
+        tintRGB:      [0.70, 0.88, 1.00],
+        tintStrength: 0.24,
+        frosted:      0.42,
+        mirror:       0.07,
+        smokeDensity: 0.04,
+        causticScale: 1.35,
+        causticTint:  [0.55, 0.83, 1.00],
+        blurPx:       20,
+        saturate:     60,
+        brightness:   1.22,
+        bgTint:       'rgba(165,215,255,0.16)',
+    },
+
+    // ── 9. Bronze ─────────────────────────────────────────────────────────────
+    // Bronze-tinted decorative glass / copper dichroic filter.
+    // Beer-Lambert: absorbs B strongly, passes R+G at different rates.
+    bronze: {
+        label:        'Bronze',
+        cssClass:     'lg-v-bronze',
+        ior:          1.58,
+        tintRGB:      [0.80, 0.48, 0.10],
+        tintStrength: 0.46,
+        frosted:      0.00,
+        mirror:       0.16,
+        smokeDensity: 0.14,
+        causticScale: 0.92,
+        causticTint:  [1.00, 0.66, 0.20],
+        blurPx:       13,
+        saturate:     128,
+        brightness:   0.96,
+        bgTint:       'rgba(180,100,20,0.14)',
+    },
+
+    // ── 10. Emerald ───────────────────────────────────────────────────────────
+    // Genuine emerald / chrome-doped beryl glass.
+    // IOR 1.575 = mid emerald range. Cr³⁺ absorption peaks at 430nm and 610nm
+    // create the distinctive green transmission window near 500–570nm.
+    emerald: {
+        label:        'Emerald',
+        cssClass:     'lg-v-emerald',
+        ior:          1.575,
+        tintRGB:      [0.06, 0.74, 0.28],
+        tintStrength: 0.44,
+        frosted:      0.00,
+        mirror:       0.09,
+        smokeDensity: 0.08,
+        causticScale: 1.08,
+        causticTint:  [0.18, 1.00, 0.42],
+        blurPx:       12,
+        saturate:     158,
+        brightness:   1.03,
+        bgTint:       'rgba(15,140,50,0.14)',
+    },
+
+    // ── 11. Rose ──────────────────────────────────────────────────────────────
+    // Rose-quartz / cranberry glass / ruby flash.
+    // Manganese-doped silicate glass: absorbs 490–580nm (green), passes red+blue.
+    rose: {
+        label:        'Rose',
+        cssClass:     'lg-v-rose',
+        ior:          1.46,
+        tintRGB:      [1.00, 0.32, 0.50],
+        tintStrength: 0.34,
+        frosted:      0.04,
+        mirror:       0.03,
+        smokeDensity: 0.04,
+        causticScale: 0.98,
+        causticTint:  [1.00, 0.52, 0.63],
+        blurPx:       11,
+        saturate:     138,
+        brightness:   1.05,
+        bgTint:       'rgba(240,80,120,0.12)',
+    },
+
+    // ── 12. Obsidian ──────────────────────────────────────────────────────────
+    // Natural volcanic obsidian (rhyolitic glass ~72% SiO₂).
+    // Near-black: strong broadband absorption from Fe²⁺/Fe³⁺/magnetite inclusions.
+    // IOR 1.49–1.52 (mid range). High mirror component from polished surface.
+    obsidian: {
+        label:        'Obsidian',
+        cssClass:     'lg-v-obsidian',
+        ior:          1.49,
+        tintRGB:      [0.07, 0.05, 0.11],
+        tintStrength: 0.86,
+        frosted:      0.07,
+        mirror:       0.24,
+        smokeDensity: 0.74,
+        causticScale: 0.30,
+        causticTint:  [0.28, 0.18, 0.44],
+        blurPx:       15,
+        saturate:     55,
+        brightness:   0.54,
+        bgTint:       'rgba(8,5,18,0.72)',
+    },
+});
 
 /**
  * Immutable spring configuration presets.
@@ -1081,6 +1531,14 @@ uniform vec2      u_scroll;       // Scroll drift since last capture, normalised
 //   4 = F2      flint                Abbe V=36.43  medium-high dispersion
 uniform float     u_glassType;
 
+// ── v4.1.0 glass variant uniforms ────────────────────────────────────────────
+uniform vec3      u_tintRGB;        // Beer-Lambert tint colour (linear RGB)
+uniform float     u_tintStrength;   // Absorption coefficient scale
+uniform float     u_frostedAmount;  // Scatter-blur amount 0..1
+uniform float     u_mirrorStrength; // Mirror reflection boost 0..1
+uniform float     u_smokeDensity;   // Uniform broadband darkening 0..1
+uniform float     u_causticScale;   // Caustic intensity multiplier
+uniform vec3      u_causticTint;    // RGB tint applied to caustic layer
 
 // ════════════════════════════════════════════════════════════════════════════
 // §A  Hash functions
@@ -1827,6 +2285,107 @@ vec3 environmentReflection(vec2 uv, vec3 normal, float fresnelFactor) {
     return texture(u_background, mirrorUV).rgb * fresnelFactor * 0.35;
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// §H2  Beer-Lambert chromatic transmission
+//
+//  Physical model: I = I₀ · exp(−σ · d)
+//
+//  σ_ch = (1.0 − tintRGB_ch) · u_tintStrength · 3.5
+//    — derived from the absorption cross-section of the glass colorant.
+//    — value 3.5 maps tintStrength ∈ [0,1] to a physically plausible
+//      optical depth range (OD ≈ 0–3.5, i.e. 100%–3% transmission).
+//
+//  Independent per-channel computation means:
+//    tintRGB = (1,0,0) → only red passes (ruby/blood glass)
+//    tintRGB = (0,1,0) → only green passes (emerald)
+//    tintRGB = (1,1,1) → neutral (clear / no absorption)
+//
+//  Applied to the refracted background colour BEFORE caustic compositing,
+//  so the caustic filaments still appear in the coloured-glass hue.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Beer-Lambert spectral absorption applied to refracted background.
+ *
+ * @param  bgColor    Refracted RGB sample from u_background
+ * @return            Attenuated RGB colour
+ */
+vec3 beerLambertTransmit(vec3 bgColor) {
+    // Absorption coefficient per channel: high where tintRGB is low
+    vec3 sigma = (1.0 - u_tintRGB) * u_tintStrength * 3.5;
+    // exp(−σ) — physical Beer-Lambert transmittance
+    vec3 transmit = exp(-sigma);
+    // Also add the tint colour as a faint self-emission (fluorescence term)
+    // so completely absorbing glass still shows its own colour faintly.
+    vec3 emission = u_tintRGB * u_tintStrength * 0.06;
+    return bgColor * transmit + emission;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §H3  Frosted glass scatter refraction
+//
+//  Rough-surface glass scatters transmitted light across a broad solid angle.
+//  Physically: the surface normal varies per microfacet; each microfacet
+//  refracts independently at a different angle → blurred transmission.
+//
+//  Implementation: multi-scale noise offsets are added to the refraction UV,
+//  producing a spatially-varying blur.  Three texture taps are averaged to
+//  approximate the scattering lobe integral with minimal extra cost.
+//
+//  Scatter scale:
+//    Low  frequencies (uv * 11.0): large-scale surface relief (mm-scale bumps)
+//    High frequencies (uv * 27.0): sub-mm ground-glass texture
+//  Both animated with different speeds so they never lock into a pattern.
+//
+//  The result is mixed with the (sharp) chromaticRefraction based on
+//  u_frostedAmount, so partial frosting gives an intermediate haze level.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Frosted-glass scatter: blurs the refraction lookup via noise UV jitter.
+ *
+ * @param  uv      Element-local UV
+ * @param  normal  Surface normal (adds surface-tilt to scatter direction)
+ * @return         Scatter-blurred refracted colour; vec3(0) if bgReady=0
+ */
+vec3 frostedScatterRefraction(vec2 uv, vec3 normal) {
+    if (u_bgReady < 0.5) return vec3(0.0);
+
+    vec2 screenUV = u_elementPos + uv * u_elementSize + u_scroll;
+    screenUV = clamp(screenUV, 0.001, 0.999);
+
+    // Scatter magnitude scales with frostedAmount
+    // 0.052 = max UV offset (tuned so heavy frost is fully diffused at 1.0)
+    float sc = u_frostedAmount * 0.052;
+
+    // Large-scale surface relief noise (drifts slowly)
+    float n1x = gnoise(uv * 11.0 + u_time * 0.030) - 0.5;
+    float n1y = gnoise(uv * 11.0 + u_time * 0.025 + vec2(17.4, 0.0)) - 0.5;
+
+    // Fine ground-glass texture noise (drifts faster, different phase)
+    float n2x = gnoise(uv * 27.0 - u_time * 0.045) - 0.5;
+    float n2y = gnoise(uv * 27.0 - u_time * 0.038 + vec2(0.0, 31.7)) - 0.5;
+
+    // Combined scatter vector (large + fine)
+    vec2 scatter = vec2(n1x + n2x * 0.4, n1y + n2y * 0.4) * sc;
+
+    // Add surface-normal contribution so scatter direction aligns with bumps
+    scatter += normal.xy * sc * 0.5;
+
+    // Three-tap average: centre + two offset samples
+    vec2 uv0 = clamp(refractUV(screenUV, normal) + scatter,          0.0, 1.0);
+    vec2 uv1 = clamp(refractUV(screenUV, normal) + scatter * 0.55,   0.0, 1.0);
+    vec2 uv2 = clamp(refractUV(screenUV, normal) + scatter * (-0.3), 0.0, 1.0);
+
+    vec3 c0 = texture(u_background, uv0).rgb;
+    vec3 c1 = texture(u_background, uv1).rgb;
+    vec3 c2 = texture(u_background, uv2).rgb;
+
+    // Weighted average — centre tap has more weight (Gaussian-like)
+    return (c0 * 0.50 + c1 * 0.30 + c2 * 0.20);
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // §J  Main fragment program
@@ -1845,7 +2404,23 @@ void main() {
     // ── 2. Chromatic refraction — Sellmeier dispersion ────────────────────────
     // Per-channel background sample using physically accurate IOR per glass type.
     // Returns black if background texture is not yet ready.
-    vec3 refractedBg = chromaticRefraction(uv, N);
+    // §v4.1: Frosted variants replace sharp refraction with scatter-blur.
+    vec3 refractedBg;
+    if (u_frostedAmount > 0.02) {
+        // Frosted: blend between sharp chromatic refraction and scatter-blur
+        // The mix is frostedAmount-weighted so partial frost gives haze gradient.
+        vec3 sharpRefract  = chromaticRefraction(uv, N);
+        vec3 scatterRefract = frostedScatterRefraction(uv, N);
+        refractedBg = mix(sharpRefract, scatterRefract, u_frostedAmount);
+    } else {
+        refractedBg = chromaticRefraction(uv, N);
+    }
+
+    // §v4.1: Beer-Lambert chromatic absorption
+    // Attenuates refracted background by the glass colorant absorption spectrum.
+    if (u_bgReady > 0.5 && u_tintStrength > 0.001) {
+        refractedBg = beerLambertTransmit(refractedBg);
+    }
 
     // ── 3. Fresnel factor ─────────────────────────────────────────────────────
     // F0 is derived from the Sellmeier reference IOR (green channel) rather
@@ -1866,12 +2441,14 @@ void main() {
     // Six-octave composite with PCG2D hash, domain warping, F2−F1 distance,
     // per-cell depth variation, and rotation-staggered grids.
     // 1.7 power concentrates energy into bright caustic filaments.
-    float cBase = pow(caustic(uvA), 1.7);
+    // §v4.1: u_causticScale and u_causticTint applied per variant.
+    float cBase = pow(caustic(uvA), 1.7) * u_causticScale;
 
     // ── 6. Chromatic caustic — physically-based spectral splitting ────────────
     // Per-channel caustic UV offsets derived from Sellmeier Δn, not fixed values.
     // RGB split magnitude scales with actual glass dispersion (SF11 >> BK7).
-    vec3 chromCaustic = chromaticCaustic(uvA);
+    // §v4.1: Tinted with per-variant causticTint colour.
+    vec3 chromCaustic = chromaticCaustic(uvA) * u_causticScale * u_causticTint;
 
     // ── 7. Specular highlight ─────────────────────────────────────────────────
     vec2  lightPos = vec2(0.22, 0.18)
@@ -1916,14 +2493,28 @@ void main() {
                + gnoise(uv * 9.2 - u_time * 0.08) * 0.006;
 
     // ── 12. Composition ───────────────────────────────────────────────────────
-    vec3 col = vec3(cBase * 0.52) + chromCaustic * 0.5;
+    // §v4.1: Caustic tint already applied above; causticTint shifts hue of
+    // cBase white contribution to match glass colour.
+    vec3 causticColour = u_causticTint * cBase * 0.52;
+    vec3 col = causticColour + chromCaustic * 0.5;
     col += vec3(specular) + vec3(edgeGlow);
     col += irid + prismColor + vec3(wave);
-    col += envRefl;
+
+    // §v4.1: Mirror boost — amplify environment reflection before adding
+    vec3 envReflBoosted = envRefl * (1.0 + u_mirrorStrength * 5.5);
+    col += envReflBoosted;
 
     // ── 13. Background refraction blend ──────────────────────────────────────
-    float refrBlend = smoothstep(0.0, 0.18, 1.0 - edgeR) * 0.28 * u_bgReady;
+    // §v4.1: Mirror variant reduces transmission (refractedBg contribution).
+    // At mirrorStrength=1: refraction is fully replaced by reflection.
+    float transmitFactor = 1.0 - u_mirrorStrength * 0.92;
+    float refrBlend = smoothstep(0.0, 0.18, 1.0 - edgeR)
+                    * 0.28 * u_bgReady * transmitFactor;
     col = mix(col, refractedBg, refrBlend);
+
+    // §v4.1: Smoke density — uniform broadband absorption after all blending
+    // Simulates soot/metallic-oxide absorption not captured by Beer-Lambert tint.
+    col *= (1.0 - u_smokeDensity * 0.68);
 
     // ── 14. Vignette mask ─────────────────────────────────────────────────────
     float vx = smoothstep(0.0, 0.05, uv.x) * smoothstep(1.0, 0.95, uv.x);
@@ -2104,6 +2695,14 @@ function _initWebGL() {
             // 3 = N-BK10 thin crown        (low-index, window glass)
             // 4 = F2 flint                 (medium-high dispersion)
             'u_glassType',
+            // §v4.1 glass variant uniforms
+            'u_tintRGB',
+            'u_tintStrength',
+            'u_frostedAmount',
+            'u_mirrorStrength',
+            'u_smokeDensity',
+            'u_causticScale',
+            'u_causticTint',
         ];
 
         const uni = {};
@@ -2229,6 +2828,17 @@ function _renderCausticsGL(es, now) {
     // ── Bind background texture to unit 1 ─────────────────────────────────────
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, _state.bgTexture);
+
+    // ── v4.1.0 glass variant upload ───────────────────────────────────────────
+    const variantKey = typeof _opts.glassVariant === 'string' ? _opts.glassVariant : 'clear';
+    const vd = GLASS_VARIANTS[variantKey] ?? GLASS_VARIANTS.clear;
+    gl.uniform3f(uni.u_tintRGB,       vd.tintRGB[0],    vd.tintRGB[1],    vd.tintRGB[2]);
+    gl.uniform1f(uni.u_tintStrength,  vd.tintStrength);
+    gl.uniform1f(uni.u_frostedAmount, vd.frosted);
+    gl.uniform1f(uni.u_mirrorStrength,vd.mirror);
+    gl.uniform1f(uni.u_smokeDensity,  vd.smokeDensity);
+    gl.uniform1f(uni.u_causticScale,  vd.causticScale);
+    gl.uniform3f(uni.u_causticTint,   vd.causticTint[0], vd.causticTint[1], vd.causticTint[2]);
 
     // ── Draw fullscreen triangle ──────────────────────────────────────────────
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -2796,6 +3406,257 @@ ${breatheKF}
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 ${specCanvas}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* §v4.1  Glass Variant CSS Overrides                                          */
+/*                                                                             */
+/*  Each variant class overrides backdrop-filter and background gradient.      */
+/*  Applied via .lg.lg-v-{name}. Set programmatically by setGlassVariant().   */
+/*  Physical parameters (Beer-Lambert, scatter, mirror) live in GLSL §H2-H3.  */
+/*  The CSS layer handles perceptual "feel" and first-frame appearance before  */
+/*  the WebGL pass renders.                                                    */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Clear ─────────────────────────────────────────────────────────────── */
+/* Near-invisible: minimal blur, maximum saturation boost, slight brightness.  */
+.lg.lg-v-clear {
+    backdrop-filter:         blur(7px) saturate(155%) brightness(1.08);
+    -webkit-backdrop-filter: blur(7px) saturate(155%) brightness(1.08);
+    background:
+        radial-gradient(ellipse 48% 34% at var(--lg-mx) var(--lg-my),
+            rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.01) 50%, transparent 70%),
+        rgba(255,255,255,0.04);
+}
+
+/* ── 2. Frosted ───────────────────────────────────────────────────────────── */
+/* 40px blur = full optical diffusion; saturate 78% = desaturated scatter.    */
+/* White radial gradient simulates light spread through ground glass surface.  */
+.lg.lg-v-frosted {
+    backdrop-filter:         blur(40px) saturate(78%) brightness(1.16);
+    -webkit-backdrop-filter: blur(40px) saturate(78%) brightness(1.16);
+    background:
+        radial-gradient(ellipse 60% 45% at var(--lg-mx) var(--lg-my),
+            rgba(255,255,255,0.22) 0%, rgba(255,255,255,0.10) 50%, transparent 72%),
+        rgba(255,255,255,0.20);
+    box-shadow:
+        inset  0  2px  0  rgba(255,255,255,0.65),
+        inset  1px 0   0  rgba(255,255,255,0.35),
+        inset  0  -1px 0  rgba(0,0,0,0.08),
+        0  4px 18px  -4px rgba(0,0,0,0.22),
+        0 14px 40px -10px rgba(0,0,0,0.14),
+        0  0   60px -20px rgba(220,230,255,0.18);
+}
+
+/* ── 3. Smoke ─────────────────────────────────────────────────────────────── */
+/* Low brightness (0.66) + reduced saturation = dark neutral-density glass.   */
+/* bg tint rgba(18,20,28) = very dark blue-grey (automotive tint film colour). */
+.lg.lg-v-smoke {
+    backdrop-filter:         blur(16px) saturate(58%) brightness(0.66);
+    -webkit-backdrop-filter: blur(16px) saturate(58%) brightness(0.66);
+    background:
+        radial-gradient(ellipse 42% 30% at var(--lg-mx) var(--lg-my),
+            rgba(80,85,105,0.18) 0%, rgba(30,32,42,0.08) 50%, transparent 68%),
+        rgba(18,20,28,0.52);
+    box-shadow:
+        inset  0  1px  0  rgba(120,130,160,0.25),
+        inset  1px 0   0  rgba(100,110,140,0.12),
+        inset  0  -1px 0  rgba(0,0,0,0.22),
+        0  4px 20px  -4px rgba(0,0,0,0.50),
+        0 18px 50px -12px rgba(0,0,0,0.38),
+        0  0   40px -15px rgba(60,70,120,0.20);
+}
+
+/* ── 4. Tinted Blue ───────────────────────────────────────────────────────── */
+/* hue-rotate(210deg) shifts existing warm tones toward cobalt blue.          */
+/* bg rgba(30,90,210) = cobalt blue float glass tint.                         */
+.lg.lg-v-tinted-blue {
+    backdrop-filter:         blur(12px) saturate(145%) brightness(1.04) hue-rotate(210deg);
+    -webkit-backdrop-filter: blur(12px) saturate(145%) brightness(1.04) hue-rotate(210deg);
+    background:
+        radial-gradient(ellipse 50% 36% at var(--lg-mx) var(--lg-my),
+            rgba(80,150,255,0.14) 0%, rgba(30,90,210,0.05) 50%, transparent 70%),
+        rgba(30,90,210,0.13);
+    box-shadow:
+        inset  0  1.5px 0  rgba(140,195,255,0.50),
+        inset  1px  0   0  rgba(100,165,255,0.22),
+        inset  0  -1px  0  rgba(0,0,0,0.12),
+        0  4px 18px  -4px  rgba(0,0,0,0.28),
+        0 16px 48px -12px  rgba(0,0,0,0.18),
+        0  0   60px -20px  rgba(50,120,255,0.28);
+}
+
+/* ── 5. Tinted Violet ─────────────────────────────────────────────────────── */
+/* hue-rotate(270deg) maximises shift toward violet/ultraviolet.              */
+.lg.lg-v-tinted-violet {
+    backdrop-filter:         blur(12px) saturate(135%) brightness(1.02) hue-rotate(270deg);
+    -webkit-backdrop-filter: blur(12px) saturate(135%) brightness(1.02) hue-rotate(270deg);
+    background:
+        radial-gradient(ellipse 50% 36% at var(--lg-mx) var(--lg-my),
+            rgba(155,80,255,0.16) 0%, rgba(100,30,210,0.06) 50%, transparent 70%),
+        rgba(100,30,210,0.14);
+    box-shadow:
+        inset  0  1.5px 0  rgba(200,155,255,0.48),
+        inset  1px  0   0  rgba(165,110,255,0.22),
+        inset  0  -1px  0  rgba(0,0,0,0.12),
+        0  4px 18px  -4px  rgba(0,0,0,0.28),
+        0 16px 48px -12px  rgba(0,0,0,0.18),
+        0  0   60px -20px  rgba(130,60,255,0.32);
+}
+
+/* ── 6. Tinted Amber ──────────────────────────────────────────────────────── */
+/* sepia(25%) pushes CSS toward the amber/golden register before hue-rotate.  */
+/* bg rgba(220,130,20) = amber glass warm honey tone.                         */
+.lg.lg-v-tinted-amber {
+    backdrop-filter:         blur(11px) saturate(148%) brightness(1.07) sepia(25%);
+    -webkit-backdrop-filter: blur(11px) saturate(148%) brightness(1.07) sepia(25%);
+    background:
+        radial-gradient(ellipse 52% 38% at var(--lg-mx) var(--lg-my),
+            rgba(255,185,50,0.16) 0%, rgba(220,130,20,0.06) 50%, transparent 70%),
+        rgba(220,130,20,0.13);
+    box-shadow:
+        inset  0  1.5px 0  rgba(255,220,120,0.52),
+        inset  1px  0   0  rgba(240,190,80,0.24),
+        inset  0  -1px  0  rgba(0,0,0,0.12),
+        0  4px 18px  -4px  rgba(0,0,0,0.28),
+        0 16px 48px -12px  rgba(0,0,0,0.16),
+        0  0   55px -18px  rgba(220,150,30,0.30);
+}
+
+/* ── 7. Mirror ────────────────────────────────────────────────────────────── */
+/* Minimal blur (3px): mirror glass is optically flat, not diffusing.         */
+/* High brightness (1.18): reflects more than it absorbs.                     */
+/* box-shadow intensified: mirror surfaces have hard specular rim reflections. */
+.lg.lg-v-mirror {
+    backdrop-filter:         blur(3px) saturate(125%) brightness(1.18);
+    -webkit-backdrop-filter: blur(3px) saturate(125%) brightness(1.18);
+    background:
+        radial-gradient(ellipse 45% 30% at var(--lg-mx) var(--lg-my),
+            rgba(240,245,255,0.16) 0%, rgba(210,220,240,0.06) 46%, transparent 66%),
+        rgba(220,228,240,0.08);
+    box-shadow:
+        inset  0   2px  0  rgba(255,255,255,0.70),
+        inset  1px  0   0  rgba(255,255,255,0.35),
+        inset  0  -1px  0  rgba(0,0,0,0.15),
+        0  6px 24px  -4px  rgba(0,0,0,0.36),
+        0 20px 60px -12px  rgba(0,0,0,0.26),
+        0  2px  6px  0     rgba(0,0,0,0.22),
+        0  0   70px -20px  rgba(160,185,230,0.26);
+}
+
+/* ── 8. Ice ───────────────────────────────────────────────────────────────── */
+/* 20px blur + hue-rotate(200deg) = frosty blue haze.                         */
+/* High brightness (1.22): ice transmits very well in the visible range.      */
+.lg.lg-v-ice {
+    backdrop-filter:         blur(20px) saturate(60%) brightness(1.22) hue-rotate(200deg);
+    -webkit-backdrop-filter: blur(20px) saturate(60%) brightness(1.22) hue-rotate(200deg);
+    background:
+        radial-gradient(ellipse 55% 42% at var(--lg-mx) var(--lg-my),
+            rgba(180,220,255,0.22) 0%, rgba(140,200,255,0.08) 52%, transparent 72%),
+        rgba(165,215,255,0.16);
+    box-shadow:
+        inset  0  2.5px 0  rgba(220,240,255,0.65),
+        inset  1px  0   0  rgba(190,225,255,0.30),
+        inset  0  -1px  0  rgba(100,160,220,0.15),
+        0  4px 20px  -4px  rgba(0,0,0,0.22),
+        0 16px 48px -12px  rgba(0,0,0,0.14),
+        0  0   70px -22px  rgba(100,180,255,0.30);
+}
+
+/* ── 9. Bronze ────────────────────────────────────────────────────────────── */
+/* sepia(40%) + warm-shifted saturate for bronze/copper dichroic appearance.  */
+.lg.lg-v-bronze {
+    backdrop-filter:         blur(13px) saturate(128%) brightness(0.96) sepia(40%);
+    -webkit-backdrop-filter: blur(13px) saturate(128%) brightness(0.96) sepia(40%);
+    background:
+        radial-gradient(ellipse 50% 36% at var(--lg-mx) var(--lg-my),
+            rgba(210,130,30,0.20) 0%, rgba(180,100,20,0.07) 50%, transparent 70%),
+        rgba(180,100,20,0.14);
+    box-shadow:
+        inset  0  1.5px 0  rgba(245,195,110,0.50),
+        inset  1px  0   0  rgba(220,160,70,0.22),
+        inset  0  -1px  0  rgba(0,0,0,0.14),
+        0  4px 18px  -4px  rgba(0,0,0,0.32),
+        0 16px 48px -12px  rgba(0,0,0,0.20),
+        0  0   50px -16px  rgba(200,110,20,0.28);
+}
+
+/* ── 10. Emerald ──────────────────────────────────────────────────────────── */
+/* hue-rotate(140deg) shifts blue toward green; high saturation = vivid gem. */
+.lg.lg-v-emerald {
+    backdrop-filter:         blur(12px) saturate(158%) brightness(1.03) hue-rotate(140deg);
+    -webkit-backdrop-filter: blur(12px) saturate(158%) brightness(1.03) hue-rotate(140deg);
+    background:
+        radial-gradient(ellipse 50% 36% at var(--lg-mx) var(--lg-my),
+            rgba(20,180,70,0.18) 0%, rgba(10,140,45,0.06) 50%, transparent 70%),
+        rgba(15,140,50,0.14);
+    box-shadow:
+        inset  0  1.5px 0  rgba(100,240,150,0.50),
+        inset  1px  0   0  rgba(70,210,110,0.22),
+        inset  0  -1px  0  rgba(0,0,0,0.12),
+        0  4px 18px  -4px  rgba(0,0,0,0.28),
+        0 16px 48px -12px  rgba(0,0,0,0.18),
+        0  0   55px -18px  rgba(20,180,70,0.32);
+}
+
+/* ── 11. Rose ─────────────────────────────────────────────────────────────── */
+/* hue-rotate(330deg) = pink-red shift; slight sepia adds warmth.             */
+.lg.lg-v-rose {
+    backdrop-filter:         blur(11px) saturate(138%) brightness(1.05) hue-rotate(330deg);
+    -webkit-backdrop-filter: blur(11px) saturate(138%) brightness(1.05) hue-rotate(330deg);
+    background:
+        radial-gradient(ellipse 50% 36% at var(--lg-mx) var(--lg-my),
+            rgba(255,120,150,0.16) 0%, rgba(240,80,115,0.05) 50%, transparent 70%),
+        rgba(240,80,120,0.12);
+    box-shadow:
+        inset  0  1.5px 0  rgba(255,180,200,0.50),
+        inset  1px  0   0  rgba(255,150,175,0.22),
+        inset  0  -1px  0  rgba(0,0,0,0.10),
+        0  4px 18px  -4px  rgba(0,0,0,0.26),
+        0 16px 48px -12px  rgba(0,0,0,0.16),
+        0  0   55px -18px  rgba(240,80,120,0.28);
+}
+
+/* ── 12. Obsidian ─────────────────────────────────────────────────────────── */
+/* Very dark: brightness(0.54) + near-black bg tint.                          */
+/* Subtle purple glow in shadow stack = characteristic obsidian iridescence.  */
+.lg.lg-v-obsidian {
+    backdrop-filter:         blur(15px) saturate(55%) brightness(0.54);
+    -webkit-backdrop-filter: blur(15px) saturate(55%) brightness(0.54);
+    background:
+        radial-gradient(ellipse 40% 28% at var(--lg-mx) var(--lg-my),
+            rgba(60,40,90,0.25) 0%, rgba(20,14,38,0.10) 48%, transparent 68%),
+        rgba(8,5,18,0.72);
+    box-shadow:
+        inset  0  1.5px 0  rgba(110,80,160,0.28),
+        inset  1px  0   0  rgba(80,55,120,0.14),
+        inset  0  -1px  0  rgba(0,0,0,0.30),
+        0  4px 22px  -4px  rgba(0,0,0,0.65),
+        0 20px 58px -12px  rgba(0,0,0,0.52),
+        0  2px  6px  0     rgba(0,0,0,0.30),
+        0  0   45px -14px  rgba(80,40,140,0.22);
+}
+
+/* ── Variant hover amplification ─────────────────────────────────────────── */
+/* Shared for all tinted variants: slightly brighter on hover.               */
+.lg.lg-v-tinted-blue.lg-interactive:hover,
+.lg.lg-v-tinted-violet.lg-interactive:hover,
+.lg.lg-v-tinted-amber.lg-interactive:hover,
+.lg.lg-v-emerald.lg-interactive:hover,
+.lg.lg-v-rose.lg-interactive:hover,
+.lg.lg-v-bronze.lg-interactive:hover {
+    filter: brightness(1.08);
+}
+
+/* Mirror hover: make the reflection more intense */
+.lg.lg-v-mirror.lg-interactive:hover {
+    filter: brightness(1.12) contrast(1.05);
+}
+
+/* Obsidian + Smoke hover: slight brightness lift from dark base */
+.lg.lg-v-obsidian.lg-interactive:hover,
+.lg.lg-v-smoke.lg-interactive:hover {
+    filter: brightness(1.14);
+}
 `;
 }
 
@@ -3650,6 +4511,61 @@ export function isRefractionActive() { return _state.bgReady; }
 export function setGlassType(type) {
     _opts.glassType = type;
 }
+/**
+ * Changes the glass surface variant at runtime.
+ * Updates the CSS class on all tracked elements and the _opts.glassVariant
+ * value for the WebGL uniform upload on the next frame.
+ *
+ * The change is fully reflected within one rAF frame (no reinitialisation).
+ * The CSS backdrop-filter transition provides a smooth visual crossfade.
+ *
+ * @param {string} variant - One of the GLASS_VARIANTS keys:
+ *   'clear' | 'frosted' | 'smoke' | 'tinted-blue' | 'tinted-violet'
+ *   'tinted-amber' | 'mirror' | 'ice' | 'bronze' | 'emerald' | 'rose' | 'obsidian'
+ *
+ * @example
+ * setGlassVariant('frosted');    // ground-glass, heavy blur
+ * setGlassVariant('tinted-blue'); // cobalt blue architectural glass
+ * setGlassVariant('mirror');     // first-surface mirror coating
+ */
+export function setGlassVariant(variant) {
+    const vd = GLASS_VARIANTS[variant];
+    if (!vd) {
+        console.warn(`LG-PRO: unknown glass variant "${variant}". Valid keys:`, Object.keys(GLASS_VARIANTS));
+        return;
+    }
+
+    // Remove all variant classes, apply the new one
+    const allVariantClasses = Object.values(GLASS_VARIANTS).map(v => v.cssClass);
+
+    for (const el of _tracked) {
+        allVariantClasses.forEach(cls => el.classList.remove(cls));
+        el.classList.add(vd.cssClass);
+    }
+
+    // Update live options — picked up by _renderCausticsGL on next frame
+    _opts.glassVariant = variant;
+
+    // Also sync IOR if the variant has a specific physical IOR
+    // (e.g. ice = 1.309, mirror = 1.785, emerald = 1.575)
+    _opts.ior = vd.ior;
+}
+
+/**
+ * Returns all available glass variant definitions.
+ * Useful for building UI pickers or iterating over available options.
+ *
+ * @returns {Record<string, GlassVariantDef>}
+ *
+ * @example
+ * const variants = getGlassVariants();
+ * Object.entries(variants).forEach(([key, def]) => {
+ *   console.log(key, def.label, def.ior);
+ * });
+ */
+export function getGlassVariants() {
+    return { ...GLASS_VARIANTS };
+}
 
 /**
  * Returns a shallow copy of the currently active options object.
@@ -3663,9 +4579,9 @@ export function getOptions() { return { ..._opts }; }
 /**
  * Returns the semantic version string of this module build.
  *
- * @returns {'4.0.0'}
+ * @returns {'4.1.0'}
  */
-export function version() { return '4.0.0'; }
+export function version() { return '4.1.0'; }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4670,8 +5586,12 @@ export function initSpecularPass() {
         // Cache uniform locations
         const uNames = [
             'u_time', 'u_mouse', 'u_hover', 'u_tilt', 'u_res',
-            'u_ior', 'u_roughness', 'u_anisotropy',
-            'u_lut', 'u_filmThick', 'u_filmIOR',
+            'u_background', 'u_bgRes', 'u_elementPos', 'u_elementSize',
+            'u_ior', 'u_refractStr', 'u_bgReady', 'u_scroll',
+            'u_glassType',
+            // v4.1.0 variant uniforms
+            'u_tintRGB', 'u_tintStrength', 'u_frostedAmount',
+            'u_mirrorStrength', 'u_smokeDensity', 'u_causticScale', 'u_causticTint',
         ];
         const uni = {};
         uNames.forEach(n => { uni[n] = gl.getUniformLocation(prog, n); });
