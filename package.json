@@ -1,22 +1,54 @@
 {
   "name": "liquid-glass-pro",
   "version": "4.1.0",
-  "description": "WebGL2 glass refraction effect for the web — caustics, chromatic aberration, spring physics, CSS backdrop-filter fallback",
+  "description": "WebGL2 physically-based liquid glass rendering for the web with refraction, caustics, chromatic aberration, iridescence, spring physics, and CSS fallback.",
   "type": "module",
-  "main": "liquid-glass-pro.js",
+  "main": "./liquid-glass-pro.js",
+  "module": "./liquid-glass-pro.js",
   "exports": {
-    ".": "./liquid-glass-pro.js"
+    ".": {
+      "import": "./liquid-glass-pro.js",
+      "default": "./liquid-glass-pro.js"
+    }
   },
+  "files": [
+    "liquid-glass-pro.js",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "dev":   "python run.py",
+    "dev": "python run.py",
     "start": "python run.py --no-open"
   },
   "dependencies": {
     "html2canvas": "^1.4.1"
   },
   "keywords": [
-    "glass", "liquid-glass", "webgl", "css", "refraction",
-    "caustics", "frosted-glass", "backdrop-filter", "ui"
+    "glass",
+    "liquid-glass",
+    "glassmorphism",
+    "webgl",
+    "webgl2",
+    "refraction",
+    "dispersion",
+    "caustics",
+    "chromatic-aberration",
+    "iridescence",
+    "frosted-glass",
+    "backdrop-filter",
+    "ui",
+    "visual-effects"
   ],
-  "license": "Apache 2.0"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BorisMalts/Liquid-Glass-PRO.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BorisMalts/Liquid-Glass-PRO/issues"
+  },
+  "homepage": "https://github.com/BorisMalts/Liquid-Glass-PRO#readme",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18"
+  }
 }
