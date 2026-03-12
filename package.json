@@ -1,6 +1,6 @@
 {
   "name": "liquid-glass-pro",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "WebGL2 glass refraction effect for the web — caustics, chromatic aberration, spring physics, CSS backdrop-filter fallback",
   "type": "module",
   "main": "liquid-glass-pro.js",

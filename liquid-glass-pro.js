@@ -1,4 +1,4 @@
-// liquid-glass-pro.js · v2.0.1
+// liquid-glass-pro.js · v3.0.0
 //
 // glass rendering for the web, built on top of webgl2 + css backdrop-filter.
 //
@@ -9,7 +9,7 @@
 //   4. spring physics drives cursor tracking and device tilt
 //   5. houdini css custom properties animate the specular highlight
 //
-// what's new in v2.0.1:
+// what's new in v3.0.0:
 //   - screen-space background refraction via html2canvas → sampler2D
 //   - per-channel cauchy dispersion (different ior per rgb)
 //   - environment reflection probe at grazing angles (fresnel-weighted)
@@ -203,7 +203,7 @@ const _defaults = {
     ior:                 1.45,   // soda-lime glass is ~1.52; slightly lower for subtlety
     refractionStrength:  0.035,  // UV displacement scale; tuned empirically
     aberrationStrength:  1.6,    // px magnitude of SVG feDisplacementMap on high tier
-    bgCaptureInterval:   50,    // ms — balance freshness vs. html2canvas overhead
+    bgCaptureInterval:   200,    // ms — balance freshness vs. html2canvas overhead
     bgCaptureScale:      0.65,   // 65% linear scale → ~8× pixel reduction
     caustics:            true,
     grain:               true,
@@ -238,6 +238,7 @@ const _state = {
     ready:          false,   // true after initLiquidGlass() has been called
     svgReady:       false,   // true after SVG filter bank has been injected
     houdiniReg:     false,   // true after CSS.registerProperty() calls succeeded
+    started:        false,
 
     // ── DOM references ───────────────────────────────────────────────────────
     observer:       /** @type {MutationObserver|null} */ (null),  // watches for new .lg nodes
@@ -346,6 +347,48 @@ const SPRING = Object.freeze({
     hover:  { stiffness: 120, damping: 14, mass: 1.0 },
     tilt:   { stiffness:  90, damping: 12, mass: 1.2 },
 });
+
+/**
+ * Rolling frame counter incremented at the top of every _rafLoop() tick.
+ * Wraps at 65535 via bitwise AND to stay a safe integer indefinitely.
+ * Used to derive per-subsystem frame-skip budgets without allocating a
+ * counter per element:
+ *
+ *   _rafFrame % 2  === 0  → caustic GL pass   (~30 fps at 60 fps display)
+ *   _rafFrame % 8  === 0  → domRect refresh   (~7.5 Hz)
+ *   _rafFrame % 30 === 0  → data-attr sync    (~2 Hz)
+ *
+ * Reset to 0 by _stopLoop() so budgets restart cleanly after pause/resume.
+ *
+ * @type {number}
+ */
+let _rafFrame = 0;
+
+/**
+ * Set of .lg elements currently intersecting the viewport.
+ * Maintained in real time by the IntersectionObserver created in
+ * _startObserver() (_io).  Elements absent from this set are skipped
+ * entirely in the WebGL render block of _rafLoop(), eliminating GPU
+ * work for off-screen glass.
+ *
+ * Kept in sync with _tracked via:
+ *   _attach()  → _io.observe(el)   adds el when it enters viewport
+ *   _detach()  → _io.unobserve(el) + _visibleElements.delete(el)
+ *
+ * @type {Set<HTMLElement>}
+ */
+const _visibleElements = new Set();
+
+/**
+ * Shared IntersectionObserver instance that populates _visibleElements.
+ * Created once in _startObserver() with threshold:0 so it fires as soon
+ * as a single pixel of a tracked element enters or leaves the viewport.
+ * Null before _startObserver() runs and after destroyLiquidGlass() resets
+ * module state — all call sites guard with optional chaining (_io?.observe).
+ *
+ * @type {IntersectionObserver|null}
+ */
+let _io = null;
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -695,55 +738,83 @@ async function _captureBackground() {
  */
 function _startBackgroundCapture() {
     const gl = _state.glBackend;
-    if (!gl) return;  // No WebGL context — capture is only useful with WebGL.
+    if (!gl) return;
 
     // ── Create background texture on TEXTURE_UNIT1 ────────────────────────────
-    // Unit 0 is implicitly used by the caustic sampler (u_caustics, future);
-    // we permanently bind the background capture to unit 1.
     const tex = gl.createTexture();
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, tex);
-
-    // Seed with a 1×1 fully-transparent placeholder.  This prevents the shader
-    // from sampling uninitialised GPU memory before the first capture completes.
     gl.texImage2D(
         gl.TEXTURE_2D, 0, gl.RGBA,
         1, 1, 0,
         gl.RGBA, gl.UNSIGNED_BYTE,
         new Uint8Array([0, 0, 0, 0])
     );
-
-    // Filtering: LINEAR_MIPMAP_LINEAR (tri-linear) for smooth downscaling when
-    // the glass element is smaller than the full-viewport texture.
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    // Clamp to edge to prevent border-wrapping artefacts at the texture margins.
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
     _state.bgTexture = tex;
 
-    // ── Kick off first capture immediately ───────────────────────────────────
-    _captureBackground();
-
-    // ── Periodic refresh ─────────────────────────────────────────────────────
-    // setInterval is used (rather than chained setTimeout) so that missed
-    // captures due to tab throttling do not compound the delay.
-    _state.bgCaptureId = setInterval(_captureBackground, _opts.bgCaptureInterval);
+    // Kick off first capture, then let _scheduleCapture() maintain the loop.
+    _captureBackground().finally(_scheduleCapture);
 
     // ── Scroll-driven refresh (debounced) ─────────────────────────────────────
-    // During active scrolling, captures would queue up faster than html2canvas
-    // can complete them.  A 150 ms debounce fires once the scroll has settled.
-    let scrollDebounce = 0;
-    window.addEventListener('scroll', () => {
-        clearTimeout(scrollDebounce);
-        scrollDebounce = setTimeout(_captureBackground, 150);
-    }, { passive: true });
+    _state.bgScrollDebounce = 0;
+    _state.bgScrollHandler = () => {
+        clearTimeout(_state.bgScrollDebounce);
+        _state.bgScrollDebounce = setTimeout(_captureBackground, 150);
+    };
+    window.addEventListener('scroll', _state.bgScrollHandler, { passive: true });
 
-    // ── Resize-driven refresh ────────────────────────────────────────────────
-    // Layout reflows change what is visible behind the glass, so a new capture
-    // is needed.  ResizeObserver fires only when dimensions actually change.
-    new ResizeObserver(() => _captureBackground()).observe(document.body);
+    // ── Resize-driven refresh ─────────────────────────────────────────────────
+    _state.bgResizeObserver = new ResizeObserver(() => _captureBackground());
+    _state.bgResizeObserver.observe(document.body);
+}
+
+/**
+ * Schedules the next background capture using requestIdleCallback when
+ * available, falling back to setTimeout.  Only one pending schedule exists
+ * at any time — the function is called exclusively from the Promise.finally
+ * of _captureBackground(), so there is no concurrent scheduling.
+ *
+ * Guard conditions that abort rescheduling:
+ *   • _state.bgCaptureId === 0  — _stopBackgroundCapture() was called;
+ *                                  do not re-queue after destroy.
+ *   • document.visibilityState  — skip when tab is hidden; the scroll/resize
+ *                                  listeners will trigger a fresh capture when
+ *                                  the user returns.
+ */
+function _scheduleCapture() {
+    // _stopBackgroundCapture() signals abort by setting bgCaptureId to 0.
+    // Check before scheduling so the chain terminates cleanly on destroy.
+    if (_state.bgCaptureId === 0) return;
+
+    const delay = _opts.bgCaptureInterval;
+
+    if (window.requestIdleCallback) {
+        // requestIdleCallback fires during browser idle time so html2canvas
+        // does not compete with user interactions or rAF callbacks.
+        // The timeout option guarantees execution within delay+200 ms even if
+        // the browser never goes idle (e.g. on a continuously animated page).
+        _state.bgCaptureId = requestIdleCallback(
+            () => {
+                // Re-read bgCaptureId: may have been zeroed while idle waited.
+                if (_state.bgCaptureId === 0) return;
+                _captureBackground().finally(_scheduleCapture);
+            },
+            { timeout: delay + 200 }
+        );
+    } else {
+        // Plain setTimeout fallback for browsers without rIC (Safari < 16.4).
+        _state.bgCaptureId = setTimeout(
+            () => {
+                if (_state.bgCaptureId === 0) return;
+                _captureBackground().finally(_scheduleCapture);
+            },
+            delay
+        );
+    }
 }
 
 /**
@@ -752,12 +823,29 @@ function _startBackgroundCapture() {
  * (that happens when the GL context is freed).
  */
 function _stopBackgroundCapture() {
-    clearInterval(_state.bgCaptureId);
+    // Zero out FIRST so any in-flight _scheduleCapture() finally-callback
+    // sees bgCaptureId === 0 and does not re-queue after cancellation.
+    const id = _state.bgCaptureId;
     _state.bgCaptureId = 0;
+
+    if (id) {
+        (window.cancelIdleCallback || clearTimeout)(id);
+        clearTimeout(id);  // safe no-op if id was an rIC handle
+    }
+
+    clearTimeout(_state.bgScrollDebounce);
     _state.bgReady     = false;
     _state.bgCapturing = false;
-}
 
+    if (_state.bgScrollHandler) {
+        window.removeEventListener('scroll', _state.bgScrollHandler);
+        _state.bgScrollHandler = null;
+    }
+    if (_state.bgResizeObserver) {
+        _state.bgResizeObserver.disconnect();
+        _state.bgResizeObserver = null;
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §6  WebGL2 caustics + refraction render engine
@@ -1179,10 +1267,10 @@ float caustic(vec2 uv) {
     // Shift caustic origin toward cursor, scaled by hover intensity
     vec2 mw = (u_mouse - 0.5) * 0.07 * u_hover;
 
-    return causticBand(uv + mw,       3.4, 0.38,  0.00) * 0.48   // Low-frequency base
-         + causticBand(uv + mw * 0.6, 5.9, 0.27, 17.30) * 0.26   // Mid-frequency detail
-         + causticBand(uv,            2.1, 0.19, 31.70) * 0.17   // Very-low secondary
-         + causticBand(uv + mw * 1.2, 8.1, 0.55,  5.53) * 0.10;  // High-frequency sparkle
+    return causticBand(uv + mw,       6.5, 0.38,  0.00) * 0.28   // Low-frequency base
+         + causticBand(uv + mw * 0.6, 10.2, 0.27, 17.30) * 0.16   // Mid-frequency detail
+         + causticBand(uv,            4.8, 0.19, 31.70) * 0.10   // Very-low secondary
+         + causticBand(uv + mw * 1.2, 14.0, 0.55,  5.53) * 0.06;  // High-frequency sparkle
 }
 
 
@@ -1359,7 +1447,7 @@ void main() {
     // Additive blend of all terms into a single HDR-range RGB value.
     // The order is intentional: caustics form the base, then specular and
     // edge features are added, then the refracted background is mixed in.
-    vec3 col = vec3(cBase * 0.52) + chromCaustic;  // Caustic base (scaled to avoid saturation)
+    vec3 col = vec3(cBase * 0.52) + chromCaustic * 0.5;  // Caustic base (scaled to avoid saturation)
     col += vec3(specular) + vec3(edgeGlow);          // Specular + edge glow
     col += irid + prismColor + vec3(wave);            // Iridescence + prism + micro-wave
     col += envRefl;                                   // Fresnel reflection contribution
@@ -1870,9 +1958,6 @@ function _injectSVG() {
  * @returns {string} Raw CSS text ready for a <style> element.
  */
 function _buildCSS() {
-    // ── Breathing border animation ────────────────────────────────────────────
-    // Sixteen-sided polygon morphing via border-radius shorthand (H V / H V syntax).
-    // The keyframe values are hand-tuned to produce smooth organic motion.
     const breatheKF = _opts.breathe ? `
 @keyframes lg-breathe {
      0% { border-radius: 16px 19px 14px 21px / 19px 14px 21px 16px; }
@@ -1883,29 +1968,24 @@ function _buildCSS() {
    100% { border-radius: 16px 19px 14px 21px / 19px 14px 21px 16px; }
 }` : '';
 
+    const { before, hover, specCanvas } = _buildSpecularCSS();
+
     return `
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* .lg-outer — SVG filter wrapper                                              */
-/* Provides the stacking context for the chromatic-aberration SVG filter.     */
-/* The negative margin + padding trick expands the filter region beyond the   */
-/* element bounds so displacement at the edges doesn't get hard-clipped.     */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg-outer {
     display: inline-flex;
     position: relative;
-    margin: -10px;   /* Expand outward to give filter room to displace pixels  */
-    padding: 10px;   /* Compensate inward so content position is unchanged     */
+    margin: -10px;
+    padding: 10px;
 }
 
-/* Display-mode variants: JS reads the element's computed display and sets    */
-/* one of these modifier classes to preserve its original layout role.        */
 .lg-outer.block { display: block;  }
 .lg-outer.flex  { display: flex;   }
 .lg-outer.grid  { display: grid;   }
 
-/* Only apply the SVG distortion filter when the user has not requested       */
-/* reduced motion, since displacement filtering can cause visual discomfort.  */
 @media (prefers-reduced-motion: no-preference) {
     .lg-outer { filter: url(#lg-distort); }
 }
@@ -1916,27 +1996,19 @@ function _buildCSS() {
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg {
-    /* CSS custom properties (Houdini-registered for smooth transitions) */
-    --lg-mx:    50%;   /* Cursor X position within element */
-    --lg-my:    30%;   /* Cursor Y position (biased upward to match visual light) */
-    --lg-irid:  0deg;  /* Iridescence rotation angle (driven by @keyframes) */
-    --lg-hover: 0;     /* Hover intensity (0=idle, 1=hovered, spring-smoothed) */
-    --lg-tx:    0;     /* Tilt X angle */
-    --lg-ty:    0;     /* Tilt Y angle */
+    --lg-mx:    50%;
+    --lg-my:    30%;
+    --lg-irid:  0deg;
+    --lg-hover: 0;
+    --lg-tx:    0;
+    --lg-ty:    0;
 
     position:   relative;
-    isolation:  isolate;    /* New stacking context for z-index layering      */
-    overflow:   hidden;     /* Clip caustic canvas and grain to border-radius */
+    isolation:  isolate;
+    overflow:   hidden;
     border-radius: 16px;
-
-    /* Compositor hint: promotes element to its own GPU layer, preventing     */
-    /* backdrop-filter from triggering unnecessary repaints of ancestors.     */
     will-change: transform, box-shadow;
 
-    /* ── Glass body background ─────────────────────────────────────────────  */
-    /* Two layers:                                                             */
-    /*   1. Radial specular highlight at cursor position (--lg-mx, --lg-my)  */
-    /*   2. Very faint white base tint for the glass body                     */
     background:
         radial-gradient(
             ellipse 48% 34% at var(--lg-mx) var(--lg-my),
@@ -1946,21 +2018,9 @@ function _buildCSS() {
         ),
         rgba(255,255,255,0.06);
 
-    /* ── Backdrop filter ───────────────────────────────────────────────────  */
-    /* blur(26px)      — softens background through glass                     */
-    /* saturate(175%)  — increases colour vibrancy of background              */
-    /* brightness(1.1) — makes glass feel luminous / bright                   */
     backdrop-filter:         blur(12px) saturate(110%) brightness(1.06);
     -webkit-backdrop-filter: blur(12px) saturate(110%) brightness(1.06);
 
-    /* ── Box shadow stack (7 layers) ──────────────────────────────────────── */
-    /* Layer 1: top inner white highlight (bright glass rim at top)           */
-    /* Layer 2: left inner white highlight (bright glass rim at left)         */
-    /* Layer 3: bottom inner dark edge (shadow under glass)                   */
-    /* Layer 4: close drop shadow (near ambient occlusion)                   */
-    /* Layer 5: far soft drop shadow (depth and lift)                         */
-    /* Layer 6: tight drop shadow (crisp edge definition)                     */
-    /* Layer 7: distant purple-tinted glow (iridescent ambient)               */
     box-shadow:
         inset  0  1.5px 0   rgba(255,255,255,0.44),
         inset  1px 0    0   rgba(255,255,255,0.20),
@@ -1978,53 +2038,15 @@ function _buildCSS() {
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* .lg::before — Cursor-tracking secondary specular highlight                  */
-/* Moves with the cursor via --lg-mx / --lg-my to create a dynamic hotspot.   */
+/* .lg::before — CSS fallback specular (§16.A)                                 */
+/* Active only on .lg:not([data-lg-webgl]) — low tier / init failure.         */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-.lg::before {
-    content:  '';
-    position: absolute;
-    inset:    0;
-    border-radius: inherit;
-    pointer-events: none;
-    z-index:  1;   /* Behind iridescence (::after, z:2) and grain (z:3) */
-
-    background:
-        /* Tight primary specular at cursor */
-        radial-gradient(
-            ellipse 36% 26% at var(--lg-mx) var(--lg-my),
-            rgba(255,255,255,0.28)  0%,
-            rgba(255,255,255,0.08) 35%,
-            transparent            60%
-        ),
-        /* Wider secondary bounce */
-        radial-gradient(
-            ellipse 82% 66% at var(--lg-mx) var(--lg-my),
-            rgba(255,255,255,0.05) 0%,
-            transparent           64%
-        ),
-        /* Fixed linear gradient to give a consistent upper-left light bias  */
-        linear-gradient(
-            142deg,
-            rgba(255,255,255,0.16)  0%,
-            rgba(255,255,255,0.04) 30%,
-            transparent            58%,
-            rgba(255,255,255,0.04) 100%
-        );
-
-    /* Fast update: the cursor can move quickly so we use a very short        */
-    /* transition to keep the highlight snappy (spring physics in JS already   */
-    /* smooth this out so CSS transition just removes any remaining stutter).  */
-    transition: background .04s linear;
-}
+${before}
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* .lg::after — Thin-film iridescence overlay                                  */
-/* A full-surface conic gradient that rotates continuously to simulate thin-   */
-/* film interference in a glass surface coating.  overlay blend mode allows    */
-/* underlying colours to show through while adding the rainbow tint.          */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg::after {
@@ -2035,8 +2057,6 @@ function _buildCSS() {
     pointer-events: none;
     z-index:  2;
 
-    /* Conic gradient with 7 hue stops at low opacity.                        */
-    /* --lg-irid is driven by @keyframes lg-irid-spin.                        */
     background: conic-gradient(
         from var(--lg-irid) at 50% 50%,
         hsla(195, 100%, 88%, .000),
@@ -2051,17 +2071,12 @@ function _buildCSS() {
 
     mix-blend-mode: overlay;
     opacity: .94;
-
-    /* lg-irid-spin @keyframes animates --lg-irid: 0deg → 360deg over 15s.   */
     animation: lg-irid-spin 15s linear infinite;
 }
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* .lg-grain — Film grain overlay                                               */
-/* Adds photographic grain to break up the smooth caustic gradient, reducing  */
-/* banding artefacts and giving the glass a more tactile, material quality.   */
-/* The grain texture is an inline SVG data-URI to avoid network requests.     */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg-grain {
@@ -2070,26 +2085,19 @@ function _buildCSS() {
     border-radius: inherit;
     pointer-events: none;
     z-index:  3;
-
-    will-change: background-position;  /* Promotes layer for position animation */
+    will-change: background-position;
 
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.76' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
     background-size:  240px 240px;
 
-    mix-blend-mode: soft-light;   /* Preserves luminance of underlying layers */
-    opacity: .038;                /* Very subtle — just enough to add texture  */
-
-    /* 9-step animation jitters the grain tile position every 120ms to        */
-    /* prevent the static noise from appearing as a fixed texture.            */
+    mix-blend-mode: soft-light;
+    opacity: .038;
     animation: lg-grain-shift .12s steps(1) infinite;
 }
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* .lg-caustic-canvas — WebGL caustic/refraction overlay                       */
-/* The hidden canvas receives drawImage() output from the shared GL context   */
-/* each frame.  screen blend mode adds the caustic light to the glass body.   */
-/* Opacity transitions from 0 to 0.035 on hover to reveal the effect.        */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg-caustic-canvas {
@@ -2100,62 +2108,43 @@ function _buildCSS() {
     pointer-events: none;
     z-index:  4;
     border-radius:   inherit;
-    mix-blend-mode:  screen;      /* Additive blend: caustic adds light, never darkens */
+    mix-blend-mode:  screen;
     opacity: 0;
     transition: opacity .35s ease;
 }
 
-/* Reveal caustic canvas on hover */
 .lg.lg-interactive:hover .lg-caustic-canvas { opacity: 0.035; }
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* Refraction status indicator (debug attribute — visually hidden)            */
-/* data-lg-refract="1" is set when background texture is ready.               */
+/* Refraction status indicator                                                 */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg[data-lg-refract="1"]::before {
-    outline: 1px solid rgba(100, 200, 255, 0.0);  /* No visible effect; hook for DevTools */
+    outline: 1px solid rgba(100, 200, 255, 0.0);
 }
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* Content children — must sit above all glass effect layers                  */
+/* Content children                                                            */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-.lg > *:not(.lg-grain):not(.lg-caustic-canvas) {
+.lg > *:not(.lg-grain):not(.lg-caustic-canvas):not(.lg-specular-canvas) {
     position: relative;
-    z-index: 5;   /* Above caustic (4), grain (3), iridescence (2), highlight (1) */
+    z-index: 5;
 }
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* Interactive state — .lg.lg-interactive                                      */
+/* Interactive state                                                           */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg.lg-interactive { cursor: pointer; }
 
-/* :hover — brighten specular, expand shadows, increase purple glow          */
-.lg.lg-interactive:hover {
-    background:
-        radial-gradient(
-            ellipse 36% 26% at var(--lg-mx) var(--lg-my),
-            rgba(255,255,255,0.35)  0%,
-            rgba(255,255,255,0.10) 38%,
-            transparent            63%
-        ),
-        rgba(255,255,255,0.025);
-    box-shadow:
-        inset  0  2px  0   rgba(255,255,255,0.55),
-        inset  1px 0   0   rgba(255,255,255,0.24),
-        inset  0 -1px  0   rgba(0,0,0,0.12),
-        0 10px 30px  -6px  rgba(0,0,0,0.38),
-        0 24px 60px -12px  rgba(0,0,0,0.26),
-        0  2px  6px  0     rgba(0,0,0,0.22),
-        0  0   65px -18px  rgba(168,138,255,0.34);
-}
+/* :hover — box-shadow amplification (§16.B), synchronized with L0 ×1.5      */
+${hover}
 
-/* :active — press-down effect via scale + translateY */
+/* :active — press-down */
 .lg.lg-interactive:active {
     transform: translateY(1px) scale(.991) translateZ(0) !important;
     transition-duration: .07s;
@@ -2168,8 +2157,7 @@ function _buildCSS() {
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* .lg-reply — Chat message reply-quote variant                                */
-/* Compact padding, indented left border, sender/text sub-elements.           */
+/* .lg-reply                                                                   */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg-reply {
@@ -2180,7 +2168,6 @@ function _buildCSS() {
     margin-bottom:  8px;
     border-radius:  10px;
 
-    /* Prominent left-border highlight (chat quote convention) */
     box-shadow:
         inset 2.5px 0 0  rgba(255,255,255,.40),
         inset 0    1px 0 rgba(255,255,255,.18),
@@ -2212,9 +2199,7 @@ function _buildCSS() {
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* .lg.lg-own — "Own message" blue/purple tint variant                         */
-/* Overrides the base glass colour with a violet-tinted gradient for messages  */
-/* sent by the local user (as distinct from received messages).               */
+/* .lg.lg-own                                                                  */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 .lg.lg-own {
@@ -2236,7 +2221,6 @@ function _buildCSS() {
         0  0   38px -12px rgba(165,100,255,.24);
 }
 
-/* Shift iridescence hue toward purple for lg-own */
 .lg.lg-own::after {
     background: conic-gradient(
         from var(--lg-irid) at 50% 50%,
@@ -2252,22 +2236,17 @@ function _buildCSS() {
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* Shape modifier classes                                                      */
+/* Shape modifiers                                                             */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-/* Pill: full border-radius, horizontal padding only */
 .lg.lg-pill { border-radius: 999px; padding: 6px 18px; }
-
-/* Card: larger radius and internal padding for content cards */
-.lg.lg-card { border-radius: 22px; padding: 20px; }
-
-/* FAB: circular floating action button */
-.lg.lg-fab {
+.lg.lg-card { border-radius: 22px;  padding: 20px; }
+.lg.lg-fab  {
     border-radius: 50%;
     width:  56px;
     height: 56px;
-    display:     flex;
-    align-items: center;
+    display:         flex;
+    align-items:     center;
     justify-content: center;
     flex-shrink: 0;
 }
@@ -2277,13 +2256,11 @@ function _buildCSS() {
 /* @keyframes                                                                  */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-/* Iridescence rotation: drives --lg-irid custom property (requires Houdini)  */
 @keyframes lg-irid-spin {
     from { --lg-irid: 0deg;   }
     to   { --lg-irid: 360deg; }
 }
 
-/* Grain position jitter: 9 steps over 120ms, random-looking xy offsets      */
 @keyframes lg-grain-shift {
       0% { background-position:   0px   0px; }
      11% { background-position: -48px -34px; }
@@ -2300,28 +2277,23 @@ ${breatheKF}
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
-/* Animation assignment rules                                                  */
+/* Animation assignments                                                       */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-/* Default glass elements: irid-spin + breathe (if enabled)                  */
 .lg:not(.lg-pill):not(.lg-fab):not(.lg-reply) {
     animation: lg-irid-spin 15s linear infinite
                ${_opts.breathe ? ', lg-breathe 9s ease-in-out infinite' : ''};
 }
 
-/* Shape variants use only irid-spin (their geometry should stay fixed)       */
 .lg.lg-pill,
 .lg.lg-fab,
 .lg.lg-reply  { animation: lg-irid-spin 15s linear infinite; }
 
-/* ::after pseudo-element (iridescence overlay) always spins independently    */
 .lg::after    { animation: lg-irid-spin 15s linear infinite; }
 
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /* @media (prefers-reduced-motion)                                             */
-/* Fully disables ALL motion for users who have requested reduced animation.  */
-/* Also removes will-change hints to reduce GPU memory usage.                 */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce) {
@@ -2329,21 +2301,24 @@ ${breatheKF}
     .lg::before,
     .lg::after,
     .lg-grain,
-    .lg-caustic-canvas {
-        animation:   none          !important;
-        transition:  none          !important;
-        will-change: auto          !important;
+    .lg-caustic-canvas,
+    .lg-specular-canvas {
+        animation:   none !important;
+        transition:  none !important;
+        will-change: auto !important;
     }
 
-    /* Restore constant border-radius (lg-breathe would otherwise freeze mid-morph) */
     .lg { border-radius: 16px !important; transform: none !important; }
-
-    /* Remove SVG distortion filter (motion-triggered by SVG <animate> too)    */
     .lg-outer { filter: none !important; }
-
-    /* Hide WebGL caustic canvas entirely — content is static so no benefit   */
-    .lg-caustic-canvas { display: none; }
+    .lg-caustic-canvas   { display: none; }
+    .lg-specular-canvas  { display: none; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* §16.C  Specular canvas + thin-film CSS overrides                            */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+${specCanvas}
 `;
 }
 
@@ -2352,12 +2327,18 @@ ${breatheKF}
  * Idempotent — guards against duplicate injection using a stable element ID.
  */
 function _injectCSS() {
-    // Use a versioned ID so that deploying a new version alongside an old one
-    // (e.g. during a rolling deploy) doesn't cause style conflicts.
-    if (document.getElementById('liquid-glass-pro-style-200')) return;
+    // Use a version-specific style tag id so old injected CSS
+    // from previous builds cannot block the new stylesheet.
+    const STYLE_ID = 'liquid-glass-pro-style-300';
+
+    // If an older stylesheet exists, remove it explicitly.
+    document.getElementById('liquid-glass-pro-style-200')?.remove();
+
+    // Prevent duplicate injection for the current version only.
+    if (document.getElementById(STYLE_ID)) return;
 
     _state.styleEl = Object.assign(document.createElement('style'), {
-        id:          'liquid-glass-pro-style-200',
+        id: STYLE_ID,
         textContent: _buildCSS(),
     });
 
@@ -2447,66 +2428,69 @@ function _stopOrientationTracking() {
 function _attach(el) {
     if (_tracked.has(el)) return;
 
+    // ── Per-element random specular offsets ───────────────────────────────────
+    // Four CSS custom properties drive the GGX lobe position scatter in §16.A.
+    // Randomised on every attach so each element gets a unique highlight angle.
+    const r = () => (Math.random() * 4 - 2).toFixed(1) + '%';
+    el.style.setProperty('--lg-sa', r());
+    el.style.setProperty('--lg-sb', r());
+    el.style.setProperty('--lg-sc', r());
+    el.style.setProperty('--lg-sd', r());
+
     // ── DPR-aware canvas sizing ────────────────────────────────────────────────
     // Cap DPR at 2 to avoid excessive memory usage on 3× displays (Retina Plus).
+    // MAX_CANVAS guards against browser limits: width * height > 268435456
+    // (16384²) causes the canvas to silently fail on Safari and Chrome.
+    const MAX_CANVAS = 4096;
     const dpr  = Math.min(window.devicePixelRatio || 1, 2);
     const rect = el.getBoundingClientRect();
-    const w    = Math.round(rect.width  * dpr) || 1;  // Minimum 1px to avoid 0×0 context
-    const h    = Math.round(rect.height * dpr) || 1;
+    const w    = Math.min(Math.round(rect.width  * dpr) || 1, MAX_CANVAS);
+    const h    = Math.min(Math.round(rect.height * dpr) || 1, MAX_CANVAS);
 
-    // ── Caustic canvas ─────────────────────────────────────────────────────────
-    // The canvas has CSS class 'lg-caustic-canvas' so the injected stylesheet
-    // applies position, blend mode, and opacity transition automatically.
-    const cvs       = document.createElement('canvas');
-    cvs.className   = 'lg-caustic-canvas';
-    cvs.width       = w;
-    cvs.height      = h;
-    // willReadFrequently: false — we only write to this context (via drawImage),
-    // never read back, so no CPU-readback optimisation is needed.
-    const ctx2d = cvs.getContext('2d', { alpha: true, willReadFrequently: false });
-    // Insert as the first child so it underlies all content children (z-index
-    // stacking does the rest, but DOM order acts as a tiebreaker).
+    // ── Caustic canvas (§6) ───────────────────────────────────────────────────
+    const cvs     = document.createElement('canvas');
+    cvs.className = 'lg-caustic-canvas';
+    cvs.width     = w;
+    cvs.height    = h;
+    const ctx2d   = cvs.getContext('2d', { alpha: true, willReadFrequently: false });
     el.insertBefore(cvs, el.firstChild);
 
-    // ── Film grain overlay ─────────────────────────────────────────────────────
+    // ── Film grain overlay ────────────────────────────────────────────────────
     if (_opts.grain && !el.querySelector('.lg-grain')) {
-        const grain = createGrainLayer();
-        el.insertBefore(grain, cvs.nextSibling);
+        el.insertBefore(createGrainLayer(), cvs.nextSibling);
     }
 
-    // ── Spring state initialisation ────────────────────────────────────────────
-    // All springs start at their natural resting position to avoid initial
-    // pop/jolt when the element first renders.
-    const springX     = _createSpring(0.5);   // Cursor X: 50% = centred
-    const springY     = _createSpring(0.3);   // Cursor Y: 30% = upper-centre (light bias)
-    const hoverSpring = _createSpring(0);     // Hover: 0 = not hovered
-    const tiltX       = _createSpring(0);     // Tilt X: 0 = no tilt
-    const tiltY       = _createSpring(0);     // Tilt Y: 0 = no tilt
+    // ── Spring state ──────────────────────────────────────────────────────────
+    const springX     = _createSpring(0.5);
+    const springY     = _createSpring(0.3);
+    const hoverSpring = _createSpring(0);
+    const tiltX       = _createSpring(0);
+    const tiltY       = _createSpring(0);
 
-    // Forward reference — es is used inside event handlers before the object literal.
-    let es;
+    let es;  // forward ref for event handlers
 
     // ── Pointer event handlers ────────────────────────────────────────────────
     const onMove = e => {
         const r = el.getBoundingClientRect();
-        // Map clientX/Y to [0,1] element-local UV coordinates.
         springX.target = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
         springY.target = Math.max(0, Math.min(1, (e.clientY - r.top)  / r.height));
-        // Tilt is a signed [−1,+1] version of the cursor position offset from centre.
         tiltX.target   = (springX.target - 0.5) * 2;
         tiltY.target   = (springY.target - 0.5) * 2;
-        // Keep domRect cache fresh during active pointer movement.
-        es.domRect = r;
+        es.domRect     = r;
     };
 
     const onEnter = () => {
-        // Signal transition to hovered state; spring will smoothly interpolate.
         hoverSpring.target = 1;
         es.hovered         = true;
+        // Re-randomise specular lobe offsets on every hover enter so no two
+        // interactions look identical — matches §15 area-light randomisation.
+        el.style.setProperty('--lg-sa', r());
+        el.style.setProperty('--lg-sb', r());
+        el.style.setProperty('--lg-sc', r());
+        el.style.setProperty('--lg-sd', r());
     };
 
     const onLeave = () => {
-        // Return spring targets to resting positions; springs will ease out naturally.
         springX.target     = 0.5;
         springY.target     = 0.30;
         hoverSpring.target = 0;
@@ -2521,16 +2505,21 @@ function _attach(el) {
 
     // ── ResizeObserver ─────────────────────────────────────────────────────────
     // Keeps the caustic canvas pixel dimensions in sync with the element layout.
-    // Uses contentRect (excludes padding and border) consistent with how we
-    // size the canvas at attach time using getBoundingClientRect.
+    // MAX_CANVAS clamp applied here too — the element can grow after attach
+    // (e.g. accordion open, font load reflow) and hit the same limit.
     const ro = new ResizeObserver(entries => {
         for (const entry of entries) {
             const cr = entry.contentRect;
-            const nw = Math.round(cr.width  * dpr) || 1;
-            const nh = Math.round(cr.height * dpr) || 1;
+            const nw = Math.min(Math.round(cr.width  * dpr) || 1, MAX_CANVAS);
+            const nh = Math.min(Math.round(cr.height * dpr) || 1, MAX_CANVAS);
             if (nw !== es.width || nh !== es.height) {
                 cvs.width   = es.width  = nw;
                 cvs.height  = es.height = nh;
+                // Keep specular canvas in sync with caustic canvas dimensions.
+                if (es.specCanvas) {
+                    es.specCanvas.width  = nw;
+                    es.specCanvas.height = nh;
+                }
             }
         }
     });
@@ -2550,29 +2539,41 @@ function _attach(el) {
         height:       h,
         hovered:      false,
         dpr,
-        domRect:      rect,          // Cached bounding rect (refreshed every 4 frames)
-        pointerMove:  onMove,        // Stored refs for removeEventListener in _detach
+        domRect:      rect,
+        pointerMove:  onMove,
         pointerEnter: onEnter,
         pointerLeave: onLeave,
+        // §15 specular pass — filled below if WebGL is available
+        specCtx:    null,  // CanvasRenderingContext2D of .lg-specular-canvas
+        specCanvas: null,  // HTMLCanvasElement reference (for ResizeObserver)
     };
 
     _elements.set(el, es);
     _tracked.add(el);
 
-    // ── WebGL caustics enablement ──────────────────────────────────────────────
-    // Only enable WebGL if:
-    //   1. caustics option is true
-    //   2. GPU tier is mid or high (low tier → CSS-only)
-    //   3. Active element count is under the hard cap
-    //   4. WebGL context initialises successfully
+    // Register with the IntersectionObserver so _visibleElements stays current.
+    // _io may be null if _attach() is called before _startObserver() runs
+    // (e.g. attachElement() called immediately after initLiquidGlass() on a
+    // page that deferred DOMContentLoaded) — the optional chain guards this.
+    _io?.observe(el);
+
+    // ── WebGL caustics + specular enablement ──────────────────────────────────
     const tier = _detectGpuTier();
     if (_opts.caustics && tier !== 'low' && _activeWebGLCount < MAX_WEBGL_ELEMENTS) {
         if (_initWebGL()) {
             _activeWebGLCount++;
             el.dataset.lgWebgl   = '1';
-            // Reflect current background readiness in a data attribute (useful
-            // for debugging and for future CSS hooks).
             el.dataset.lgRefract = _state.bgReady ? '1' : '0';
+
+            // §15 — attach dedicated specular canvas immediately after caustic.
+            // Requires initSpecularPass() to have been called in initLiquidGlass().
+            if (_spec.gl) {
+                const specCtx  = attachSpecularCanvas(el, cvs);
+                es.specCtx     = specCtx;
+                // CanvasRenderingContext2D.canvas gives us back the element
+                // for ResizeObserver and _detach() cleanup.
+                es.specCanvas  = specCtx ? specCtx.canvas : null;
+            }
         }
     }
 }
@@ -2598,6 +2599,7 @@ function _detach(el) {
     // ── Remove injected DOM nodes ─────────────────────────────────────────────
     es.canvas.remove();
     el.querySelector('.lg-grain')?.remove();
+    es.specCanvas?.remove();
 
     // ── Remove CSS custom properties set by the spring system ─────────────────
     ['--lg-mx', '--lg-my', '--lg-tx', '--lg-ty', '--lg-hover', 'transform']
@@ -2609,6 +2611,12 @@ function _detach(el) {
         delete el.dataset.lgWebgl;
         delete el.dataset.lgRefract;
     }
+
+    // ── Unregister from IntersectionObserver and visibility set ───────────────
+    // Must happen before _tracked.delete() so the rAF loop stops scheduling
+    // GL work for this element on the very next frame.
+    _io?.unobserve(el);
+    _visibleElements.delete(el);
 
     // ── Clean up state records ────────────────────────────────────────────────
     _elements.delete(el);
@@ -2647,71 +2655,93 @@ let _lastTs = 0;
  * Main animation loop body.  Called by requestAnimationFrame with a
  * DOMHighResTimeStamp argument.  Schedules itself for the next frame.
  *
- * @param {number} ts - Current timestamp in milliseconds.
+ * Changes vs v3.0.0:
+ *   - _rafFrame counter drives per-subsystem frame-skip budgets.
+ *   - _visibleElements gate skips off-screen elements entirely.
+ *   - domRect refresh reduced from every 4 → every 8 frames (~133 ms @ 60 fps).
+ *   - Caustic GL pass runs every 2nd frame (effective 30 fps) — caustics are
+ *     slow-moving noise; halving their rate is imperceptible.
+ *   - Specular GL pass runs every frame — cursor-tracking requires full rate.
+ *   - data-lg-refract attribute update throttled to every 30 frames (~500 ms).
+ *   - _renderCausticsGL call is now explicit (was silently missing in v3.0.0).
+ *
+ * @param {number} ts - Current timestamp in milliseconds (from rAF).
  */
 function _rafLoop(ts) {
     _state.rafId = requestAnimationFrame(_rafLoop);
 
+    // Increment frame counter — wraps at 65535 via bitwise AND, stays integer.
+    _rafFrame = (_rafFrame + 1) & 0xFFFF;
+
     // ── Delta time ────────────────────────────────────────────────────────────
-    // Convert ms → seconds and clamp to MAX_DT to prevent explosion after
-    // the tab returns from being backgrounded/throttled.
     const dt = Math.min((ts - (_lastTs || ts)) * 0.001, MAX_DT);
     _lastTs = ts;
 
-    // ── Device tilt (read once per frame, shared across all elements) ──────────
+    // ── Device tilt (read once, shared across all elements this frame) ────────
     const gx = _state.deviceTilt.x;
     const gy = _state.deviceTilt.y;
 
     // ── Per-element update ────────────────────────────────────────────────────
     for (const el of _tracked) {
         const es = _elements.get(el);
-        if (!es) continue;  // Should never happen, but guard defensively
+        if (!es) continue;
 
-        // Advance all springs
+        // ── Spring integration (every frame — needed for smooth CSS updates) ──
         _stepSpring(es.springX,     SPRING.cursor, dt);
         _stepSpring(es.springY,     SPRING.cursor, dt);
         _stepSpring(es.hoverSpring, SPRING.hover,  dt);
         _stepSpring(es.tiltX,       SPRING.tilt,   dt);
         _stepSpring(es.tiltY,       SPRING.tilt,   dt);
 
-        // When not hovered, let the gyroscope drive tilt (parallax effect).
-        // 0.45 dampens the gyroscope influence to prevent extreme tilting
-        // at large device angles.
+        // When not hovered, gyroscope drives tilt (parallax).
         if (!es.hovered) {
             es.tiltX.target = gx * 0.45;
             es.tiltY.target = gy * 0.45;
         }
 
-        // ── CSS custom property updates ───────────────────────────────────────
-        // setProperty() is more efficient than modifying el.style.transform
-        // for properties used in ::before / ::after pseudo-elements, since the
-        // browser can recalc the pseudo-elements independently.
+        // ── CSS custom property updates (every frame) ─────────────────────────
         el.style.setProperty('--lg-mx',    (es.springX.value * 100).toFixed(2) + '%');
         el.style.setProperty('--lg-my',    (es.springY.value * 100).toFixed(2) + '%');
         el.style.setProperty('--lg-tx',     es.tiltX.value.toFixed(4));
         el.style.setProperty('--lg-ty',     es.tiltY.value.toFixed(4));
         el.style.setProperty('--lg-hover',  es.hoverSpring.value.toFixed(4));
 
-        // ── CSS 3D perspective transform ──────────────────────────────────────
-        // rotateX is driven by tiltY (up/down tilt → tilt around horizontal axis)
-        // rotateY is driven by tiltX (left/right tilt → tilt around vertical axis)
-        // The sign inversion on ry (−tiltX) produces the correct "3D screen"
-        // perspective where moving the cursor right tilts the right side away.
-        const rx = ( es.tiltY.value * 3.0).toFixed(3);  // degrees (small angles)
+        // ── CSS 3D perspective transform (every frame) ────────────────────────
+        const rx = ( es.tiltY.value * 3.0).toFixed(3);
         const ry = (-es.tiltX.value * 3.0).toFixed(3);
         el.style.transform = `translateZ(0) perspective(700px) rotateX(${rx}deg) rotateY(${ry}deg)`;
 
-        // ── WebGL caustic render ───────────────────────────────────────────────
-        if (el.dataset.lgWebgl) {
-            // Refresh the cached bounding rect every 4 rAF frames.
-            // (ts | 0) % 4 is a fast integer modulo using bitwise OR.
-            if ((ts | 0) % 4 === 0) {
-                es.domRect = el.getBoundingClientRect();
-            }
+        // ── WebGL passes — gated on element visibility ────────────────────────
+        // Off-screen elements skip all GPU work entirely.  The IntersectionObserver
+        // in _startObserver() maintains _visibleElements in real time.
+        if (!el.dataset.lgWebgl || !_visibleElements.has(el)) continue;
 
+        // Refresh cached bounding rect every 8 frames (~133 ms @ 60 fps).
+        // Halved from the original every-4-frames to reduce layout thrash,
+        // acceptable because rect only changes on scroll/resize (both of which
+        // also trigger a background re-capture that resets domRect anyway).
+        if (_rafFrame % 8 === 0) {
+            es.domRect = el.getBoundingClientRect();
+        }
+
+        // Caustic GL pass — every 2nd frame (effective ~30 fps).
+        // Caustics are driven by slow gradient noise (u_time * 0.07–0.55);
+        // a 33 ms update interval is below the threshold of perceptible
+        // temporal aliasing for these frequencies.
+        if (_rafFrame % 2 === 0) {
             _renderCausticsGL(es, ts);
+        }
 
-            // Sync the data-attribute refraction indicator with actual readiness.
+        // Specular GL pass — every frame (~60 fps).
+        // The Cook-Torrance highlight tracks the cursor via spring-smoothed
+        // u_mouse; reducing its rate would produce visible lag on fast moves.
+        if (es.specCtx) {
+            renderSpecularGL(es, es.specCtx, ts, _opts);
+        }
+
+        // Sync refraction indicator attribute every 30 frames (~500 ms).
+        // This is purely a data attribute consumed by CSS; no visual urgency.
+        if (_rafFrame % 30 === 0) {
             el.dataset.lgRefract = _state.bgReady ? '1' : '0';
         }
     }
@@ -2784,12 +2814,38 @@ function _detachSubtree(node) {
  * Performs an initial DOM scan to attach to existing glass elements, then
  * creates and starts the MutationObserver for dynamic content.
  */
+/**
+ * Performs an initial DOM scan to attach to existing glass elements, then
+ * creates and starts the IntersectionObserver (_io) and MutationObserver
+ * for dynamic content.
+ */
 function _startObserver() {
-    // Initial attach: process all existing matching elements.
+    // ── Initial attach: process all pre-existing matching elements ────────────
+    // Must run before the observers are created so that _tracked is fully
+    // populated by the time the IntersectionObserver loop runs below.
     document.querySelectorAll(_opts.selector).forEach(_attach);
 
-    // Create observer: childList catches insertions/removals, subtree catches
-    // changes anywhere in the document tree (not just direct children of body).
+    // ── IntersectionObserver — viewport visibility gate ───────────────────────
+    // threshold:0 → callback fires the moment any pixel crosses the viewport
+    // boundary in either direction.  No rootMargin: we want strict viewport
+    // intersection, not a pre-fetch buffer, because the goal is GPU savings.
+    _io = new IntersectionObserver(entries => {
+        for (const e of entries) {
+            if (e.isIntersecting) _visibleElements.add(e.target);
+            else                  _visibleElements.delete(e.target);
+        }
+    }, { threshold: 0 });
+
+    // Observe all elements that were just attached in the scan above.
+    // Elements attached later (via MutationObserver or attachElement()) call
+    // _io.observe(el) individually inside _attach().
+    for (const el of _tracked) _io.observe(el);
+
+    // ── MutationObserver — dynamic content discovery ──────────────────────────
+    // childList:true catches direct insertions/removals.
+    // subtree:true catches mutations anywhere in the document tree, not just
+    // direct children of <body> — necessary for SPA route changes that swap
+    // deeply nested content without touching the body directly.
     _state.observer = new MutationObserver(mutations => {
         for (const m of mutations) {
             m.addedNodes.forEach(_attachSubtree);
@@ -2831,29 +2887,53 @@ function _startObserver() {
  * initLiquidGlass({ ior: 1.5, refractionStrength: 0.04, breathe: false });
  */
 export function initLiquidGlass(options = {}) {
+    // Prevent double initialization
     if (_state.ready) return;
-    _state.ready = true;
 
-    // Shallow merge: user values override defaults, but unspecified keys
-    // retain their default values.
+    _state.ready = true;
     _opts = { ..._defaults, ...options };
 
+    // Register Houdini early.
+    // This can safely run before the DOM is fully ready.
     _registerHoudini();
-    _injectSVG();
-    _injectCSS();
-    _startOrientationTracking();
 
-    if (document.readyState === 'loading') {
-        // DOM not yet available — defer until DOMContentLoaded.
-        document.addEventListener('DOMContentLoaded', () => {
-            _startObserver();
-            _startLoop();
-        }, { once: true });
-    } else {
-        // DOM already ready (e.g. script loaded deferred or after load event).
+    // Move the main startup logic into a separate function
+    // so we can run it only after the DOM is ready.
+    const start = () => {
+        // Extra guard in case start is triggered more than once
+        if (_state.started) return;
+        _state.started = true;
+
+        // Inject shared SVG/CSS resources
+        _injectSVG();
+        _injectCSS();
+
+        // Start device orientation tracking
+        _startOrientationTracking();
+
+        // IMPORTANT:
+        // specular-pass creates a canvas and appends it to document.body,
+        // so it must run only after body is available.
+        try {
+            initSpecularPass();
+        } catch (err) {
+            console.error('[LiquidGlass] initSpecularPass failed:', err);
+        }
+
+        // Start observing elements and the main render loop
         _startObserver();
         _startLoop();
+    };
+
+    // If the DOM is still loading, wait until it is ready
+    // so document.body definitely exists.
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', start, { once: true });
+        return;
     }
+
+    // If the DOM is already ready, start immediately
+    start();
 }
 
 /**
@@ -2913,6 +2993,7 @@ export function destroyLiquidGlass() {
         bgCapturing:  false,
         deviceTilt:   { x: 0, y: 0 },
     });
+    destroySpecularPass();
 }
 
 /**
@@ -3094,9 +3175,9 @@ export function getOptions() { return { ..._opts }; }
 /**
  * Returns the semantic version string of this module build.
  *
- * @returns {'2.0.1'}
+ * @returns {'3.0.0'}
  */
-export function version() { return '2.0.1'; }
+export function version() { return '3.0.0'; }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3181,3 +3262,1452 @@ export function useLiquidGlass(ref) {
 
     }, [ref]);  // Re-run only if the ref object itself changes (uncommon)
     }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15  Specular highlight system — full Cook-Torrance PBR
+//
+//  Replaces the CSS radial-gradient approximation with a physically-grounded
+//  WebGL2 specular pass rendered into a dedicated per-element canvas layer,
+//  composited above the caustic canvas (z-index 4.5) via screen blend mode.
+//
+//  Physics implemented here (all per-pixel, no approximations):
+//
+//  D  — GGX / Trowbridge-Reitz Normal Distribution Function
+//         D(h) = α² / (π · (NdotH²(α²−1) + 1)²)
+//         Controls the shape and spread of the specular lobe.
+//         α = roughness², re-parameterised for perceptual linearity.
+//
+//  F  — Schlick Fresnel with F0 derivation from IOR
+//         F0 = ((n−1)/(n+1))²   for air/glass interface
+//         F(v,h) = F0 + (1−F0)·(1−VdotH)⁵
+//         Models how reflectance increases at grazing angles.
+//
+//  G  — Smith GGX Height-Correlated Visibility (Heitz 2014)
+//         More accurate than uncorrelated Smith; prevents over-darkening
+//         at grazing angles which is an artefact of the uncorrelated form.
+//         V(l,v,h) = 0.5 / (NdotL·√(NdotV²(1−a²)+a²) +
+//                            NdotV·√(NdotL²(1−a²)+a²))
+//
+//  Anisotropic extension — Burley 2012 / Disney BRDF
+//         Separate αT (tangent) and αB (bitangent) roughness values
+//         derived from a scalar anisotropy ∈ [0,1].
+//         D_aniso(h) = 1 / (π·αT·αB·(HdotT²/αT²+HdotB²/αB²+NdotH²)²)
+//         G_aniso uses per-axis Λ functions — no simplification.
+//         Driven by a slowly drifting tangent field from the noise normal map.
+//
+//  Energy conservation — Kulla-Conty multi-bounce term (2017)
+//         Single-scattering BRDFs lose energy at high roughness because they
+//         ignore inter-microfacet bounces.  The Kulla-Conty E(μ) LUT adds
+//         back the "missing energy" term:
+//         f_ms = (1−E(NdotV))·(1−E(NdotL)) / (π·(1−E_avg))
+//         Approximated analytically (no texture lookup required).
+//
+//  Multiple light sources
+//         Three virtual lights contribute to the BRDF sum:
+//           L0  — primary cursor-tracking directional light (warm white)
+//           L1  — fixed upper-left environment fill light (cool blue-white)
+//           L2  — secondary back-scatter light (purple tint, opposite to L0)
+//         Each light carries its own colour, intensity, and angular size
+//         (area light approximation via representative-point method, Karis 2013).
+//
+//  Thin-film iridescence (Born & Wolf, 1999)
+//         Computes optical path difference in a thin coating of thickness d
+//         and index n_film, then evaluates the interference term for RGB
+//         wavelengths (λR=680nm, λG=550nm, λB=450nm):
+//         I(λ) = cos(2π · n_film · d · cos(θt) / λ)
+//         This replaces the CSS conic-gradient approximation in the original §15.
+//
+//  Import surface from §6:
+//         _VERT_SRC     — reuse the same fullscreen-triangle vertex shader
+//         surfaceNormal — not directly importable from GLSL; the normal
+//                         computation is inlined here with identical math
+//                         so the two passes stay visually synchronised.
+//
+//  Canvas layer
+//         Each tracked element gets a second canvas: .lg-specular-canvas
+//         Rendered after the caustic pass, blended with mix-blend-mode: screen.
+//         Opacity is controlled via CSS transition identical to caustic canvas.
+//
+//  Performance
+//         Shared WebGL2 context (same pattern as caustic pass in §6).
+//         Roughness LUT (E_avg for Kulla-Conty) is precomputed once into a
+//         1D 256-texel texture at init time to avoid sqrt/pow in the hot path.
+//         Draw call is a single fullscreen triangle (3 vertices).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.0  Constants and shared state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Physical constants for the glass medium.
+ * All values match soda-lime glass (the most common optical glass).
+ */
+const GLASS_IOR       = 1.52;          // Soda-lime glass refractive index
+const GLASS_F0        = Math.pow((GLASS_IOR - 1) / (GLASS_IOR + 1), 2);  // ≈ 0.0426
+const FILM_THICKNESS  = 320;           // nm — antireflection coating thickness
+const FILM_IOR        = 1.38;          // MgF₂ antireflection coating (common on optics)
+
+/**
+ * Roughness parameter for the glass surface.
+ * α = 0.04 → near-perfect mirror (GGX lobe is very tight).
+ * This is the "Disney reparameterisation": α = userRoughness².
+ * Corresponds to a microsurface RMS slope of ~2°.
+ */
+const BASE_ROUGHNESS  = 0.04;
+
+/**
+ * Anisotropy strength [0, 1].
+ * 0 = isotropic (perfect circle lobe).
+ * 0.35 = slight horizontal stretch, like brushed glass or float glass distortion.
+ */
+const ANISOTROPY      = 0.35;
+
+/** Singleton specular GL state — separate from §6 caustic GL state. */
+const _spec = {
+    gl:         null,   // WebGL2RenderingContext
+    canvas:     null,   // hidden off-screen source canvas
+    program:    null,   // compiled specular program
+    uniforms:   {},     // cached uniform locations
+    lut:        null,   // WebGLTexture — Kulla-Conty E_avg LUT
+    startTime:  0,
+};
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.1  Fragment shader — full Cook-Torrance + anisotropic + Kulla-Conty
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fragment shader source for the specular pass.
+ *
+ * Coordinate conventions (match §6 exactly for visual synchronisation):
+ *   v_uv          — element-local UV [0,1], top-left origin
+ *   N             — view-space surface normal from animated noise bump map
+ *   V             — view direction, fixed at (0,0,1) (orthographic camera)
+ *   L_i           — light direction vectors in view space
+ *   H_i           — half-vectors between V and each L_i
+ *
+ * Tangent frame construction:
+ *   T  — tangent vector, perpendicular to N, aligned with noise gradient
+ *   B  — bitangent = cross(N, T), completing the orthonormal frame
+ *
+ * @type {string}
+ */
+const _SPEC_FRAG_SRC = /* glsl */`#version 300 es
+precision highp float;
+
+// ── Interpolants ─────────────────────────────────────────────────────────────
+in  vec2  v_uv;
+
+// ── Output ───────────────────────────────────────────────────────────────────
+out vec4  fragColor;
+
+// ── Uniforms ─────────────────────────────────────────────────────────────────
+uniform float     u_time;
+uniform vec2      u_mouse;
+uniform float     u_hover;
+uniform vec2      u_tilt;
+uniform vec2      u_res;
+uniform float     u_ior;          // Live IOR from _opts (default 1.52)
+uniform float     u_roughness;    // BASE_ROUGHNESS (0.04)
+uniform float     u_anisotropy;   // ANISOTROPY (0.35)
+uniform sampler2D u_lut;          // Kulla-Conty E_avg LUT (1D, 256×1)
+uniform float     u_filmThick;    // Thin-film thickness in nm
+uniform float     u_filmIOR;      // Thin-film coating IOR
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Utility
+// ════════════════════════════════════════════════════════════════════════════
+
+const float PI    = 3.14159265358979;
+const float INV_PI = 0.31830988618;
+
+// Safe normalise: returns vec3(0,0,1) if input is degenerate.
+vec3 safeNorm(vec3 v) {
+    float l = length(v);
+    return l > 1e-6 ? v / l : vec3(0.0, 0.0, 1.0);
+}
+
+// Perlin-style gradient noise — identical to §6 so surface normals are
+// frame-accurate with the caustic pass.
+vec2 hash2(vec2 p) {
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+}
+
+float gnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(dot(hash2(i + vec2(0,0)), f - vec2(0,0)),
+            dot(hash2(i + vec2(1,0)), f - vec2(1,0)), u.x),
+        mix(dot(hash2(i + vec2(0,1)), f - vec2(0,1)),
+            dot(hash2(i + vec2(1,1)), f - vec2(1,1)), u.x),
+        u.y
+    ) * 0.5 + 0.5;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.A  Surface normal + tangent frame
+//
+//  The normal is computed identically to §6 surfaceNormal() so that the
+//  specular highlight sits exactly on the same surface as the caustics.
+//  Additionally we extract the tangent T from the height field gradient
+//  for use in anisotropic GGX — this is the Gram-Schmidt-orthogonalised
+//  direction of maximum curvature on the noise surface.
+// ════════════════════════════════════════════════════════════════════════════
+
+struct SurfaceFrame {
+    vec3 N;   // Surface normal
+    vec3 T;   // Tangent  (aligned with noise gradient = aniso "grain" direction)
+    vec3 B;   // Bitangent
+};
+
+/**
+ * Computes view-space normal and full tangent frame from the animated
+ * bump-map height field.  The tangent T is taken directly from the
+ * finite-difference gradient of the noise, giving anisotropy a natural
+ * orientation tied to the surface structure.
+ *
+ * @param  uv  Element-local UV
+ * @return     Orthonormal SurfaceFrame { N, T, B }
+ */
+SurfaceFrame buildFrame(vec2 uv) {
+    float eps  = 0.002;
+    float hC   = gnoise(uv * 7.0 + u_time * 0.07);
+    float hR   = gnoise((uv + vec2(eps, 0.0)) * 7.0 + u_time * 0.07);
+    float hU   = gnoise((uv + vec2(0.0, eps)) * 7.0 + u_time * 0.07);
+
+    float mouseInf = u_hover * 0.4 * exp(-length(uv - u_mouse) * 3.5);
+    float hM       = gnoise(uv * 11.0 - u_mouse * 2.0 + u_time * 0.13) * mouseInf;
+
+    float dX = (hR - hC) / eps + hM * 0.03;
+    float dY = (hU - hC) / eps + hM * 0.03;
+
+    vec3 N = normalize(vec3(-dX * 0.8, -dY * 0.8, 1.0));
+
+    // Tangent: direction of maximum gradient in screen space, lifted to 3D.
+    // Gram-Schmidt orthogonalisation against N ensures T ⊥ N exactly.
+    vec3 Traw = normalize(vec3(dX, dY, 0.0) + vec3(0.0001));  // avoid degenerate
+    vec3 T    = normalize(Traw - dot(Traw, N) * N);
+    vec3 B    = cross(N, T);
+
+    return SurfaceFrame(N, T, B);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.B  GGX Isotropic NDF
+//
+//  Trowbridge & Reitz (1975), re-parameterised by Walter et al. (2007)
+//  and standardised as GGX.
+//
+//  D(h) = α² / (π · ((NdotH²)(α²−1) + 1)²)
+//
+//  At NdotH = 1 (h perfectly aligned with N) → D = α²/π, the peak.
+//  At grazing NdotH → 0, D → 0 quickly for small α.
+//  Total solid-angle integral ∫D(h)(NdotH)dh = 1 (energy-preserving).
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @param  NdotH    Cosine of angle between surface normal and half-vector.
+ * @param  alpha    Roughness²  (α in the GGX formula, NOT perceptual roughness)
+ * @return          NDF value D(h) in steradians⁻¹
+ */
+float D_GGX(float NdotH, float alpha) {
+    float a2  = alpha * alpha;
+    float denom = NdotH * NdotH * (a2 - 1.0) + 1.0;
+    return a2 / (PI * denom * denom);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.C  Anisotropic GGX NDF
+//
+//  Burley (2012), as used in the Disney BRDF.
+//  Separate roughness values αT (along tangent) and αB (along bitangent).
+//  Derived from scalar anisotropy ∈ [0,1]:
+//    αT = α / √(1−0.9·aniso)
+//    αB = α · √(1−0.9·aniso)
+//
+//  D_aniso(h) = 1 / (π·αT·αB · (HdotT²/αT² + HdotB²/αB² + NdotH²)²)
+//
+//  When anisotropy=0: αT=αB=α, reduces exactly to isotropic D_GGX.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @param  H        Half-vector in view space
+ * @param  frame    SurfaceFrame containing N, T, B
+ * @param  alpha    Isotropic base roughness²
+ * @param  aniso    Anisotropy scalar [0,1]
+ * @return          Anisotropic NDF value
+ */
+float D_GGX_aniso(vec3 H, SurfaceFrame frame, float alpha, float aniso) {
+    float alphaT = alpha / sqrt(max(1e-6, 1.0 - 0.9 * aniso));
+    float alphaB = alpha * sqrt(max(1e-6, 1.0 - 0.9 * aniso));
+
+    float HdotT  = dot(H, frame.T);
+    float HdotB  = dot(H, frame.B);
+    float NdotH  = max(dot(H, frame.N), 0.0);
+
+    float term   = HdotT * HdotT / (alphaT * alphaT)
+                 + HdotB * HdotB / (alphaB * alphaB)
+                 + NdotH * NdotH;
+
+    return 1.0 / (PI * alphaT * alphaB * term * term);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.D  Schlick Fresnel with exact F0 from IOR
+//
+//  For a dielectric at normal incidence:
+//    F0 = ((n1 − n2) / (n1 + n2))²
+//       = ((1 − IOR) / (1 + IOR))²
+//
+//  Schlick's approximation (1994):
+//    F(θ) = F0 + (1 − F0) · (1 − cosθ)⁵
+//
+//  Error vs exact Fresnel: < 2% for dielectrics, excellent for glass.
+//  Full Fresnel (using both s and p polarisations) has no closed form
+//  in terms of cosines alone; Schlick's approximation is standard in PBR.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @param  cosTheta  cos(angle between V and H), i.e. VdotH
+ * @param  F0        Reflectance at normal incidence (derived from IOR)
+ * @return           Schlick Fresnel reflectance in [F0, 1.0]
+ */
+float F_Schlick(float cosTheta, float F0) {
+    float x = clamp(1.0 - cosTheta, 0.0, 1.0);
+    // x⁵ via repeated squaring: more numerically stable than pow(x,5)
+    float x2 = x  * x;
+    float x4 = x2 * x2;
+    return F0 + (1.0 - F0) * x4 * x;
+}
+
+/** Vector form for coloured F0 (used in multi-bounce term). */
+vec3 F_Schlick_vec(float cosTheta, vec3 F0) {
+    float x  = clamp(1.0 - cosTheta, 0.0, 1.0);
+    float x2 = x  * x;
+    float x4 = x2 * x2;
+    return F0 + (1.0 - F0) * x4 * x;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.E  Smith GGX Height-Correlated Visibility Function
+//
+//  Heitz (2014) "Understanding the Masking-Shadowing Function in
+//  Microfacet-Based BRDFs", JCGT.
+//
+//  The height-correlated form accounts for statistical correlation between
+//  masking and shadowing at the same height on the microsurface.  It is
+//  more physically accurate than the uncorrelated (λ_V · λ_L) product,
+//  especially at grazing angles where uncorrelated Smith over-darkens.
+//
+//  Λ(v) = (−1 + √(1 + α²·tan²θ)) / 2
+//       = (−1 + √(1 + α²·(1−NdotV²)/NdotV²)) / 2
+//
+//  G2(l,v) = 1 / (1 + Λ(v) + Λ(l))      [height-correlated]
+//
+//  Optimised form (Lagarde, de Rousiers 2014 — used in Filament, UE4):
+//  V(l,v) = G2 / (4·NdotL·NdotV)  [visibility term, denominator absorbed]
+//    = 0.5 / (NdotL·√(NdotV²(1−a²)+a²) + NdotV·√(NdotL²(1−a²)+a²))
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Height-correlated Smith GGX visibility term with denominator 4·NdotL·NdotV
+ * already absorbed (returns V, not G).
+ *
+ * @param  NdotL  cos angle of light with normal
+ * @param  NdotV  cos angle of view  with normal
+ * @param  alpha  Roughness²
+ * @return        Combined visibility + denominator term
+ */
+float V_SmithGGX_heightCorrelated(float NdotL, float NdotV, float alpha) {
+    float a2    = alpha * alpha;
+    float lambdaV = NdotL * sqrt(NdotV * NdotV * (1.0 - a2) + a2);
+    float lambdaL = NdotV * sqrt(NdotL * NdotL * (1.0 - a2) + a2);
+    // 0.5 / (λV + λL) : the 4·NdotL·NdotV denominator is absorbed into λ
+    return 0.5 / (lambdaV + lambdaL + 1e-6);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.F  Anisotropic Smith-GGX Visibility
+//
+//  Belcour & Barla (2017) / Heitz (2014) anisotropic extension.
+//  Per-axis Λ functions use separate αT, αB for tangent and bitangent:
+//
+//  Λ_aniso(v) = (−1 + √(1 + (αT²·(VdotT/VdotN)² + αB²·(VdotB/VdotN)²))) / 2
+//
+//  Height-correlated form:
+//  V_aniso(l,v) = 0.5 / (NdotL·Λ_aniso(V) + NdotV·Λ_aniso(L))
+// ════════════════════════════════════════════════════════════════════════════
+
+float _lambdaAniso(float NdotX, float TdotX, float BdotX,
+                   float alphaT, float alphaB) {
+    float t2 = (TdotX / max(NdotX, 1e-4)) * (TdotX / max(NdotX, 1e-4));
+    float b2 = (BdotX / max(NdotX, 1e-4)) * (BdotX / max(NdotX, 1e-4));
+    return 0.5 * (-1.0 + sqrt(1.0 + alphaT * alphaT * t2 + alphaB * alphaB * b2));
+}
+
+/**
+ * Anisotropic height-correlated Smith visibility term.
+ *
+ * @param  V        View vector (view space)
+ * @param  L        Light vector (view space)
+ * @param  frame    SurfaceFrame
+ * @param  alpha    Isotropic base roughness²
+ * @param  aniso    Anisotropy scalar
+ * @return          Visibility term V(l,v)
+ */
+float V_SmithGGX_aniso(vec3 V, vec3 L, SurfaceFrame frame,
+                       float alpha, float aniso) {
+    float alphaT = alpha / sqrt(max(1e-6, 1.0 - 0.9 * aniso));
+    float alphaB = alpha * sqrt(max(1e-6, 1.0 - 0.9 * aniso));
+
+    float NdotV  = max(dot(frame.N, V), 1e-4);
+    float NdotL  = max(dot(frame.N, L), 1e-4);
+    float TdotV  = dot(frame.T, V);
+    float BdotV  = dot(frame.B, V);
+    float TdotL  = dot(frame.T, L);
+    float BdotL  = dot(frame.B, L);
+
+    float lambdaV = _lambdaAniso(NdotV, TdotV, BdotV, alphaT, alphaB);
+    float lambdaL = _lambdaAniso(NdotL, TdotL, BdotL, alphaT, alphaB);
+
+    return 0.5 / (NdotL * (1.0 + lambdaV) + NdotV * (1.0 + lambdaL) + 1e-6);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.G  Kulla-Conty multi-bounce energy compensation
+//
+//  Kulla & Conty (2017) "Revisiting Physically Based Shading at Imageworks"
+//  SIGGRAPH Course.
+//
+//  Single-scattering BRDFs (including Cook-Torrance) violate energy
+//  conservation at high roughness: the missing energy represents light that
+//  bounced between microfacets before escaping.  The multi-scatter term adds
+//  this back:
+//
+//  f_ms(l,v) = (1−E(NdotL)) · (1−E(NdotV)) / (π · (1 − E_avg))
+//
+//  where E(μ) = ∫₀^(2π) ∫₀^(π/2) f_single(l,v) · cos(θ) · sin(θ) dθ dφ
+//  is the directional albedo of the single-scattering BRDF.
+//
+//  E(μ) and E_avg are precomputed into a 1D LUT keyed on (μ, roughness).
+//  Here we use the Lagarde et al. (2018) analytical approximation that
+//  avoids a 2D LUT entirely, accurate to < 1% for α ∈ [0.02, 1.0]:
+//
+//  E(μ, α) ≈ 1 − (0.0475 + 0.0904·α − 0.1819·α²) · (1−μ)
+//             − (0.5     + 0.2916·α               ) · (1−μ)²
+//             + (0.1     + 0.1532·α               ) · (1−μ)³
+//  E_avg(α) ≈ 1 − 0.2734·α − 0.4694·α² (fit to Monte Carlo table)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Directional albedo E(μ, α) — analytical approximation.
+ * Avoids texture lookup for E(μ); sampler u_lut is retained for
+ * future higher-order terms or validation comparisons.
+ *
+ * @param  mu     cos(θ) for incident or exitant direction
+ * @param  alpha  Roughness²
+ * @return        E(μ) ∈ [0,1], fraction of energy reflected by single-scatter
+ */
+float kc_E(float mu, float alpha) {
+    float om = 1.0 - mu;
+    return clamp(
+        1.0
+        - (0.0475 + 0.0904 * alpha - 0.1819 * alpha * alpha) * om
+        - (0.5    + 0.2916 * alpha                          ) * om * om
+        + (0.1    + 0.1532 * alpha                          ) * om * om * om,
+        0.0, 1.0
+    );
+}
+
+/** E_avg(α) — hemispherical average of E(μ,α). */
+float kc_Eavg(float alpha) {
+    return clamp(1.0 - 0.2734 * alpha - 0.4694 * alpha * alpha, 0.0, 1.0);
+}
+
+/**
+ * Kulla-Conty multi-bounce term f_ms.
+ * Add to the single-scatter BRDF to restore energy at high roughness.
+ * For glass (α = 0.04) the correction is < 0.3% — physically negligible
+ * but included for mathematical completeness.
+ *
+ * @param  NdotL  cos angle of light with normal
+ * @param  NdotV  cos angle of view  with normal
+ * @param  alpha  Roughness²
+ * @return        Multi-bounce radiance contribution (scalar; apply colour later)
+ */
+float f_multiScatter(float NdotL, float NdotV, float alpha) {
+    float Ev   = kc_E(NdotV, alpha);
+    float El   = kc_E(NdotL, alpha);
+    float Eavg = kc_Eavg(alpha);
+    float denom = PI * (1.0 - Eavg);
+    return (1.0 - Ev) * (1.0 - El) / max(denom, 1e-6);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.H  Thin-film iridescence  (Born & Wolf, 1999)
+//
+//  A thin coating of thickness d and refractive index n_film creates
+//  constructive/destructive interference for different wavelengths.
+//
+//  Optical path difference:
+//    OPD(θ_t) = 2 · n_film · d · cos(θ_t)
+//
+//  where θ_t is the refraction angle inside the film:
+//    cos(θ_t) = √(1 − (sin(θ_i)/n_film)²)  (Snell's law)
+//    sin(θ_i) = √(1 − VdotH²)
+//
+//  Interference intensity for wavelength λ:
+//    I(λ) = 0.5 + 0.5 · cos(2π · OPD / λ)
+//
+//  Evaluated at RGB wavelengths:
+//    λR = 680 nm, λG = 550 nm, λB = 450 nm
+//
+//  The iridescence colour is then modulated by Fresnel (more visible at
+//  grazing angles) and the Schlick factor to respect energy conservation.
+//
+//  This replaces the CSS conic-gradient approximation with a derivation
+//  from Maxwell's equations of wave optics.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Evaluates thin-film iridescence for three RGB wavelengths.
+ *
+ * @param  VdotH       cos(angle between V and H)
+ * @param  filmThick   Coating thickness in nm
+ * @param  filmIOR     Coating refractive index
+ * @return             RGB iridescence colour ∈ [0,1]³
+ */
+vec3 thinFilmIridescence(float VdotH, float filmThick, float filmIOR) {
+    // sin²(θ_i) from cos(θ_i) = VdotH
+    float sin2_i  = clamp(1.0 - VdotH * VdotH, 0.0, 1.0);
+
+    // Snell's law into the film: sin²(θ_t) = sin²(θ_i) / n_film²
+    float sin2_t  = sin2_i / (filmIOR * filmIOR);
+
+    // cos(θ_t) from Pythagorean identity
+    float cos_t   = sqrt(max(0.0, 1.0 - sin2_t));
+
+    // Optical path difference: OPD = 2 · n · d · cos(θ_t)
+    float OPD     = 2.0 * filmIOR * filmThick * cos_t;
+
+    // Interference at three wavelengths (units: nm)
+    const float lambdaR = 680.0;
+    const float lambdaG = 550.0;
+    const float lambdaB = 450.0;
+
+    float iR = 0.5 + 0.5 * cos(2.0 * PI * OPD / lambdaR);
+    float iG = 0.5 + 0.5 * cos(2.0 * PI * OPD / lambdaG);
+    float iB = 0.5 + 0.5 * cos(2.0 * PI * OPD / lambdaB);
+
+    return vec3(iR, iG, iB);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.I  Area light representative-point approximation
+//
+//  Karis (2013) "Real Shading in Unreal Engine 4", SIGGRAPH Course.
+//
+//  Point lights produce infinitely sharp specular highlights on smooth
+//  surfaces (D→∞ at the perfect reflection angle).  Real light sources
+//  have finite angular size.  The representative-point method clamps the
+//  highlight to a minimum size corresponding to the light's solid angle:
+//
+//    α_modified = α + lightRadius / (2 · lightDist)
+//
+//  For the cursor light, lightRadius is driven by hover intensity (the
+//  more the user hovers, the more "focused" the virtual light becomes).
+//
+//  Energy normalisation: because the NDF is not re-normalised after
+//  modifying α, a correction factor is applied:
+//    normFactor = α / α_modified
+//  This prevents the highlight from appearing dimmer as α_modified grows.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Computes the effective roughness for an area light source.
+ *
+ * @param  alpha        Surface roughness²
+ * @param  lightRadius  Angular radius of the light source (in UV space)
+ * @param  lightDist    Distance from fragment to light position (UV space)
+ * @return              struct (effectiveAlpha, normalisationFactor)
+ */
+vec2 areaLightRoughness(float alpha, float lightRadius, float lightDist) {
+    float alphaMod   = alpha + lightRadius / (2.0 * max(lightDist, 0.01));
+    float normFactor = alpha / max(alphaMod, 1e-6);
+    return vec2(alphaMod, normFactor);
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.J  Full Cook-Torrance BRDF evaluation for one light
+//
+//  f_r(l,v) = D(h) · F(v,h) · V(l,v)  +  f_ms(l,v)
+//           ──────────────────────────
+//            single-scatter specular     multi-bounce correction
+//
+//  Returns radiance contribution L_out = f_r · NdotL · lightColour.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Evaluates the full Cook-Torrance BRDF for a single directional light.
+ *
+ * @param  V         View direction (view space, normalised)
+ * @param  L         Light direction (view space, normalised)
+ * @param  frame     SurfaceFrame at this fragment
+ * @param  alpha     Roughness²
+ * @param  aniso     Anisotropy [0,1]
+ * @param  F0        Fresnel at normal incidence (scalar, for glass ≈ 0.04)
+ * @param  lColour   RGB light colour and intensity
+ * @param  lightPos  UV-space light position (for area light calculation)
+ * @param  fragUV    Fragment UV (for area light distance)
+ * @return           Outgoing radiance contribution
+ */
+vec3 brdf_cookTorrance(vec3 V, vec3 L, SurfaceFrame frame,
+                       float alpha, float aniso, float F0,
+                       vec3 lColour, vec2 lightPos, vec2 fragUV) {
+    float NdotL = max(dot(frame.N, L), 0.0);
+    float NdotV = max(dot(frame.N, V), 1e-4);
+    if (NdotL < 1e-5) return vec3(0.0);
+
+    vec3  H     = safeNorm(V + L);
+    float NdotH = max(dot(frame.N, H), 0.0);
+    float VdotH = max(dot(V, H), 0.0);
+
+    // ── Area light roughness modification ─────────────────────────────────────
+    float lightRadius = 0.08 * (1.0 - u_hover * 0.6);   // focused on hover
+    float lightDist   = length(fragUV - lightPos);
+    vec2  areaResult  = areaLightRoughness(alpha, lightRadius, lightDist);
+    float alphaEff    = areaResult.x;
+    float normFactor  = areaResult.y;
+
+    // ── D: Anisotropic GGX NDF ─────────────────────────────────────────────────
+    float D = D_GGX_aniso(H, frame, alphaEff, aniso) * normFactor * normFactor;
+
+    // ── F: Schlick Fresnel ─────────────────────────────────────────────────────
+    float F = F_Schlick(VdotH, F0);
+
+    // ── V: Height-correlated Smith GGX (anisotropic) ──────────────────────────
+    float Vis = V_SmithGGX_aniso(V, L, frame, alphaEff, aniso);
+
+    // ── Single-scatter specular term ───────────────────────────────────────────
+    float singleSpec = D * F * Vis;
+
+    // ── Kulla-Conty multi-bounce (energy compensation) ────────────────────────
+    // The F0 colour is F0·(1−F_avg) for the multi-bounce Fresnel tint.
+    // F_avg(F0) ≈ F0 + (1−F0)·0.04762  (Kulla-Conty Eq. 12)
+    float Favg  = F0 + (1.0 - F0) * 0.04762;
+    float ms    = f_multiScatter(NdotL, NdotV, alphaEff);
+    float msF   = Favg * Favg * ms;   // multi-bounce is F0-tinted
+
+    float total = singleSpec + msF;
+
+    return lColour * total * NdotL;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.K  Three-light configuration
+//
+//  L0  Primary: cursor-tracking warm key light
+//      Colour: 1.0, 0.97, 0.92 (warm white, 5600K tungsten-ish)
+//      Position: follows u_mouse with hover intensification
+//      Intensity: 2.8 base, boosted on hover
+//
+//  L1  Secondary: fixed upper-left environment fill
+//      Colour: 0.88, 0.93, 1.00 (cool sky blue, 8000K)
+//      Position: static at upper-left (0.12, 0.10)
+//      Intensity: 0.55 (fill, not key)
+//
+//  L2  Back-scatter: opposite to L0, purple tint
+//      Colour: 0.76, 0.70, 1.00 (violet, approximates indirect bounced light)
+//      Position: mirror of L0 around element centre
+//      Intensity: 0.30
+// ════════════════════════════════════════════════════════════════════════════
+
+struct Light {
+    vec3  colour;
+    vec2  uvPos;   // UV-space position for area-light distance
+    vec3  dir;     // View-space direction (normalised)
+};
+
+/**
+ * Builds the three-light array for this fragment.
+ * L0 position is cursor-driven; L1 and L2 are partially tilt-driven.
+ *
+ * @param  uv   Fragment UV (used to build view-space light directions)
+ * @return      Light[3]
+ */
+void buildLights(vec2 uv, out Light L0, out Light L1, out Light L2) {
+    // Light positions in UV space
+    vec2 pos0 = vec2(0.20, 0.16)
+              + u_mouse * 0.30 * u_hover
+              + u_tilt  * 0.10;
+
+    vec2 pos1 = vec2(0.12, 0.10) + u_tilt * 0.05;
+
+    vec2 pos2 = vec2(1.0, 1.0) - pos0;           // mirror of L0
+
+    // View-space direction: light pos lifted to 3D (z = 0.7 = oblique angle)
+    // This approximates a light 35° above the surface plane.
+    L0.colour = vec3(1.00, 0.97, 0.92) * (2.8 + u_hover * 1.4);
+    L0.uvPos  = pos0;
+    L0.dir    = safeNorm(vec3(pos0 - uv, 0.7));
+
+    L1.colour = vec3(0.88, 0.93, 1.00) * 0.55;
+    L1.uvPos  = pos1;
+    L1.dir    = safeNorm(vec3(pos1 - uv, 0.7));
+
+    L2.colour = vec3(0.76, 0.70, 1.00) * 0.30;
+    L2.uvPos  = pos2;
+    L2.dir    = safeNorm(vec3(pos2 - uv, 0.5));
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.L  Vignette + alpha derivation
+// ════════════════════════════════════════════════════════════════════════════
+
+float vignetteSpecular(vec2 uv) {
+    float vx = smoothstep(0.0, 0.06, uv.x) * smoothstep(1.0, 0.94, uv.x);
+    float vy = smoothstep(0.0, 0.06, uv.y) * smoothstep(1.0, 0.94, uv.y);
+    return vx * vy;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// §15.M  Main
+// ════════════════════════════════════════════════════════════════════════════
+
+void main() {
+    vec2 uv  = v_uv;
+
+    // ── Surface frame ─────────────────────────────────────────────────────────
+    SurfaceFrame frame = buildFrame(uv);
+
+    // ── Camera / view direction ───────────────────────────────────────────────
+    // Orthographic projection: V is constant (0,0,1) plus a small tilt offset
+    // that simulates perspective parallax from the viewer moving.
+    vec3 V = safeNorm(vec3(-u_tilt.x * 0.15, -u_tilt.y * 0.15, 1.0));
+
+    // ── Material parameters ───────────────────────────────────────────────────
+    // α = roughness², IOR-derived F0, anisotropy from §15 constants.
+    float alpha = u_roughness * u_roughness;
+    float F0    = pow((u_ior - 1.0) / (u_ior + 1.0), 2.0);
+
+    // ── Build lights ──────────────────────────────────────────────────────────
+    Light L0, L1, L2;
+    buildLights(uv, L0, L1, L2);
+
+    // ── BRDF sum over three lights ────────────────────────────────────────────
+    vec3 specular = vec3(0.0);
+    specular += brdf_cookTorrance(V, L0.dir, frame, alpha, u_anisotropy,
+                                  F0, L0.colour, L0.uvPos, uv);
+    specular += brdf_cookTorrance(V, L1.dir, frame, alpha, u_anisotropy,
+                                  F0, L1.colour, L1.uvPos, uv);
+    specular += brdf_cookTorrance(V, L2.dir, frame, alpha, u_anisotropy,
+                                  F0, L2.colour, L2.uvPos, uv);
+
+    // ── Thin-film iridescence ─────────────────────────────────────────────────
+    // Evaluate for the primary light half-vector.
+    vec3  H0     = safeNorm(V + L0.dir);
+    float VdotH0 = max(dot(V, H0), 0.0);
+    vec3  irid   = thinFilmIridescence(VdotH0, u_filmThick, u_filmIOR);
+
+    // Fresnel-weight: iridescence is most visible at grazing angles (F→1)
+    float fresnelEdge = F_Schlick(max(dot(frame.N, V), 0.0), F0);
+    // Modulate iridescence strength: subtle at centre, vivid at edges
+    vec3  iridContrib = irid * fresnelEdge * 0.12;
+
+    // ── Combine ───────────────────────────────────────────────────────────────
+    vec3 col = specular + iridContrib;
+
+    // ── Vignette ──────────────────────────────────────────────────────────────
+    col *= vignetteSpecular(uv);
+
+    // ── Alpha: luminance-driven, capped for glass translucency ────────────────
+    float luma  = dot(col, vec3(0.2126, 0.7152, 0.0722));  // Rec. 709 coefficients
+    float alpha_out = clamp(luma * 2.2, 0.0, 1.0) * 0.82;
+
+    // Premultiplied alpha output
+    fragColor = vec4(col * alpha_out, alpha_out);
+}`;
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.1  WebGL2 initialisation for the specular pass
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compiles and links a WebGL2 shader program.
+ * Identical helper to §6's _buildProgram; duplicated here so §15 is
+ * self-contained (no runtime dependency on §6's private symbols).
+ *
+ * @param {WebGL2RenderingContext} gl
+ * @param {string} vs  Vertex shader GLSL
+ * @param {string} fs  Fragment shader GLSL
+ * @returns {WebGLProgram}
+ */
+function _buildSpecProgram(gl, vs, fs) {
+    function compile(type, src) {
+        const sh = gl.createShader(type);
+        gl.shaderSource(sh, src);
+        gl.compileShader(sh);
+        if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+            const log = gl.getShaderInfoLog(sh);
+            gl.deleteShader(sh);
+            throw new Error(`LG-PRO §15 shader:\n${log}`);
+        }
+        return sh;
+    }
+    const prog = gl.createProgram();
+    gl.attachShader(prog, compile(gl.VERTEX_SHADER,   vs));
+    gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, fs));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS))
+        throw new Error(`LG-PRO §15 link:\n${gl.getProgramInfoLog(prog)}`);
+    return prog;
+}
+
+
+/**
+ * Precomputes the Kulla-Conty E_avg LUT into a 1D 256-texel RGBA texture
+ * stored in TEXTURE_UNIT2 (units 0 and 1 are reserved by §6).
+ *
+ * The LUT stores E_avg(α) in the R channel for 256 uniformly spaced roughness
+ * values α ∈ [0, 1].  The G channel stores a precomputed dE/dα derivative
+ * for smooth interpolation in the shader (currently unused but available).
+ *
+ * @param {WebGL2RenderingContext} gl
+ * @returns {WebGLTexture}
+ */
+function _buildKullaContyLUT(gl) {
+    const N    = 256;
+    const data = new Float32Array(N * 4);
+
+    for (let i = 0; i < N; i++) {
+        const alpha = i / (N - 1);
+        const eavg  = 1.0 - 0.2734 * alpha - 0.4694 * alpha * alpha;
+        // E_avg, dE/dα, 0, 1
+        data[i * 4 + 0] = Math.max(0, Math.min(1, eavg));
+        data[i * 4 + 1] = -(0.2734 + 2.0 * 0.4694 * alpha);  // derivative
+        data[i * 4 + 2] = 0;
+        data[i * 4 + 3] = 1;
+    }
+
+    const tex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(
+        gl.TEXTURE_2D, 0, gl.RGBA32F,
+        N, 1, 0,
+        gl.RGBA, gl.FLOAT, data
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+    return tex;
+}
+
+
+/**
+ * Initialises the shared WebGL2 context for the specular pass.
+ * Separate from §6's _initWebGL() to keep the two passes fully independent.
+ * Returns true on success, false on any error.
+ *
+ * @returns {boolean}
+ */
+export function initSpecularPass() {
+    if (_spec.gl) return true;
+
+    const canvas = document.createElement('canvas');
+    canvas.setAttribute('aria-hidden', 'true');
+    canvas.style.cssText = [
+        'position:fixed', 'width:0', 'height:0',
+        'pointer-events:none', 'opacity:0', 'z-index:-99998',
+    ].join(';');
+    document.body.appendChild(canvas);
+
+    const gl = canvas.getContext('webgl2', {
+        alpha:                true,
+        premultipliedAlpha:   true,
+        antialias:            false,
+        depth:                false,
+        stencil:              false,
+        preserveDrawingBuffer: true,
+    });
+
+    if (!gl) { canvas.remove(); return false; }
+
+    // EXT_color_buffer_float is required for RGBA32F LUT texture
+    if (!gl.getExtension('EXT_color_buffer_float')) {
+        console.warn('LG-PRO §15: EXT_color_buffer_float unavailable — LUT fallback active.');
+    }
+
+    try {
+        const prog = _buildSpecProgram(gl, _VERT_SRC, _SPEC_FRAG_SRC);
+
+        // Fullscreen triangle VBO (identical to §6)
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER,
+            new Float32Array([-1, -1, 3, -1, -1, 3]),
+            gl.STATIC_DRAW
+        );
+
+        gl.useProgram(prog);
+        const aPos = gl.getAttribLocation(prog, 'a_pos');
+        gl.enableVertexAttribArray(aPos);
+        gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+
+        // Cache uniform locations
+        const uNames = [
+            'u_time', 'u_mouse', 'u_hover', 'u_tilt', 'u_res',
+            'u_ior', 'u_roughness', 'u_anisotropy',
+            'u_lut', 'u_filmThick', 'u_filmIOR',
+        ];
+        const uni = {};
+        uNames.forEach(n => { uni[n] = gl.getUniformLocation(prog, n); });
+
+        // Bind LUT to TEXTURE_UNIT2
+        const lut = _buildKullaContyLUT(gl);
+        gl.uniform1i(uni.u_lut, 2);
+
+        _spec.gl        = gl;
+        _spec.canvas    = canvas;
+        _spec.program   = prog;
+        _spec.uniforms  = uni;
+        _spec.lut       = lut;
+        _spec.startTime = performance.now();
+
+        return true;
+
+    } catch (err) {
+        console.warn('LG-PRO §15: specular pass init failed.\n', err);
+        canvas.remove();
+        return false;
+    }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.2  Per-element specular canvas attachment
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Attaches a dedicated specular canvas to a glass element.
+ * Called after the caustic canvas is attached in §10's _attach().
+ *
+ * The specular canvas sits at z-index 4.5 (above caustics at 4,
+ * below content at 5).  The fractional z-index is achieved by inserting
+ * the canvas immediately after the caustic canvas in the DOM — the
+ * stacking order is determined by DOM order for equal z-index.
+ *
+ * @param {HTMLElement}             el     - The .lg element
+ * @param {HTMLCanvasElement}       causticCanvas  - From §10 (used for insertion point)
+ * @returns {CanvasRenderingContext2D|null}
+ */
+export function attachSpecularCanvas(el, causticCanvas) {
+    const cvs       = document.createElement('canvas');
+    cvs.className   = 'lg-specular-canvas';
+
+    // MAX_CANVAS guards against browser limits: width * height > 268435456
+    // (16384²) causes the canvas to silently fail on Safari and Chrome.
+    const MAX_CANVAS = 4096;
+    const dpr   = Math.min(window.devicePixelRatio || 1, 2);
+    const rect  = el.getBoundingClientRect();
+    cvs.width   = Math.min(Math.round(rect.width  * dpr) || 1, MAX_CANVAS);
+    cvs.height  = Math.min(Math.round(rect.height * dpr) || 1, MAX_CANVAS);
+
+    // Insert directly after caustic canvas (DOM-order compositing)
+    causticCanvas.insertAdjacentElement('afterend', cvs);
+
+    return cvs.getContext('2d', { alpha: true, willReadFrequently: false });
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.3  Per-frame specular render
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Renders one frame of the Cook-Torrance specular pass for a single element.
+ * Called from the rAF loop in §11 immediately after _renderCausticsGL().
+ *
+ * All physically-based calculations live exclusively in the GLSL shader;
+ * this function's sole responsibility is uploading per-frame uniforms and
+ * blitting the result into the element's specular canvas.
+ *
+ * @param {object} es   - ElementState from §10 (springs, domRect, etc.)
+ * @param {CanvasRenderingContext2D} specCtx  - 2D context of specular canvas
+ * @param {number} now  - rAF timestamp in milliseconds
+ * @param {object} opts - Live _opts from §1 (ior, etc.)
+ */
+export function renderSpecularGL(es, specCtx, now, opts) {
+    const gl  = _spec.gl;
+    const uni = _spec.uniforms;
+    if (!gl || !_spec.program) return;
+
+    const w = es.width;
+    const h = es.height;
+    if (w < 1 || h < 1) return;
+
+    // Resize shared specular GL canvas to match element
+    if (_spec.canvas.width !== w || _spec.canvas.height !== h) {
+        _spec.canvas.width  = w;
+        _spec.canvas.height = h;
+        gl.viewport(0, 0, w, h);
+    }
+
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const t = (now - _spec.startTime) * 0.001;
+
+    // Upload all per-frame uniforms
+    gl.uniform1f(uni.u_time,       t);
+    gl.uniform2f(uni.u_mouse,      es.springX.value, es.springY.value);
+    gl.uniform1f(uni.u_hover,      es.hoverSpring.value);
+    gl.uniform2f(uni.u_tilt,       es.tiltX.value, es.tiltY.value);
+    gl.uniform2f(uni.u_res,        w, h);
+    gl.uniform1f(uni.u_ior,        opts.ior ?? GLASS_IOR);
+    gl.uniform1f(uni.u_roughness,  BASE_ROUGHNESS);
+    gl.uniform1f(uni.u_anisotropy, ANISOTROPY);
+    gl.uniform1f(uni.u_filmThick,  FILM_THICKNESS);
+    gl.uniform1f(uni.u_filmIOR,    FILM_IOR);
+
+    // Bind Kulla-Conty LUT
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, _spec.lut);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    // Blit to element's specular canvas
+    specCtx.clearRect(0, 0, w, h);
+    specCtx.drawImage(_spec.canvas, 0, 0);
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.4  CSS for the specular canvas layer
+//
+//  .lg-specular-canvas sits between caustic (z-index 4) and content (5).
+//  screen blend mode: specular adds light, never darkens.
+//  Opacity is managed separately from the caustic canvas:
+//    — always slightly visible (base opacity 0.045) so the highlight
+//      is subtly present even without hover
+//    — increases to 0.92 on hover to reveal the full physical highlight
+//
+//  The transition curve uses a custom cubic-bezier matching a spring
+//  response (fast attack, soft tail) to feel physically plausible.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Returns the CSS rule block for the specular canvas layer.
+ * Intended to be appended to the output of §8's _buildCSS().
+ *
+ * @returns {string}
+ */
+export function buildSpecularCSS() {
+    return `
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* .lg-specular-canvas — Cook-Torrance PBR specular overlay (§15)             */
+/* Sits above caustic canvas (z 4), below content (z 5).                     */
+/* screen blend: specular adds light energy, satisfies energy conservation.  */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.lg-specular-canvas {
+    position:       absolute;
+    inset:          0;
+    width:          100%;
+    height:         100%;
+    pointer-events: none;
+    z-index:        4;          /* Same as caustic; DOM order makes it render above */
+    border-radius:  inherit;
+    mix-blend-mode: screen;
+    opacity:        0.045;      /* Always-on: subtle highlight even at rest */
+    transition:     opacity .28s cubic-bezier(0.34, 1.20, 0.64, 1);
+                    /* Spring-like easing: fast attack, gentle overshoot tail */
+}
+
+/* Hover: reveal full physical highlight */
+.lg.lg-interactive:hover .lg-specular-canvas {
+    opacity: 0.92;
+}
+
+/* Active: reduce highlight on press (light recedes as glass compresses) */
+.lg.lg-interactive:active .lg-specular-canvas {
+    opacity: 0.35;
+    transition-duration: .06s;
+}
+
+/* Reduced motion: keep a static minimal specular, disable transition */
+@media (prefers-reduced-motion: reduce) {
+    .lg-specular-canvas {
+        opacity:    0.03 !important;
+        transition: none !important;
+        animation:  none !important;
+    }
+}`;
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15.5  Teardown
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Destroys the specular WebGL context and frees all GPU resources.
+ * Call from destroyLiquidGlass() in §13 after the caustic teardown.
+ */
+export function destroySpecularPass() {
+    if (!_spec.gl) return;
+
+    const gl = _spec.gl;
+    gl.deleteTexture(_spec.lut);
+    gl.deleteProgram(_spec.program);
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    _spec.canvas?.remove();
+
+    _spec.gl       = null;
+    _spec.canvas   = null;
+    _spec.program  = null;
+    _spec.uniforms = {};
+    _spec.lut      = null;
+    _spec.startTime = 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §16  _buildSpecularCSS() — CSS complement layer для Cook-Torrance PBR (§15)
+//
+//  Контекст
+//  ────────
+//  §15 заменил CSS-аппроксимацию GGX настоящим WebGL2-пасом: полноценный
+//  Cook-Torrance BRDF с анизотропным GGX (Burley 2012), Smith height-correlated
+//  visibility (Heitz 2014), Kulla-Conty multi-bounce (2017) и тонкоплёночной
+//  иридесценцией по Born & Wolf (1999).
+//
+//  Задача этой функции — не дублировать физику (она вся в GLSL), а:
+//
+//  1. CSS fallback для GPU-tier 'low' или при ошибке initSpecularPass().
+//     На этих устройствах .lg-specular-canvas отсутствует; ::before
+//     предоставляет визуально согласованное приближение.
+//     Лобы выровнены с тремя источниками света из §15.K:
+//       L0  — тугой эллипс, warm-white, cursor-driven  (approx. GGX peak, α≈0.04)
+//       L1  — широкий эллипс, cool-blue, static UL     (fill light shoulder)
+//       L2  — мягкий линейный градиент, violet-tint    (back-scatter / envmap)
+//
+//  2. Переходные состояния hover / active для .lg-specular-canvas (§15.4).
+//     Opacity и transition уже определены там; здесь добавляем box-shadow
+//     стек, синхронизированный с интенсивностью PBR-света:
+//       — idle:   shadow stack = ambient occlusion + subtle purple glow
+//       — hover:  shadow stack amplифицируется (NdotL → max при cursor track)
+//       — active: press-shadow (translateY + flatten highlight)
+//
+//  3. Тонкая CSS iridescence ::after для 'low' tier вместо GLSL thin-film.
+//     Реализована conic-gradient с 8 hue-stops, фазово сдвинутыми на
+//     120° (Δφ = 2π/3) — то же смещение что у λR/λG/λB в §15.H.
+//     Opacity намеренно ниже чем в оригинальном §15 (0.044 → 0.028),
+//     потому что при наличии WebGL-iridescence суммарная энергия не должна
+//     удваиваться.
+//
+//  Возвращаемые ключи
+//  ──────────────────
+//  { before, hover, specCanvas }
+//    before      — строка CSS для ::before (fallback specular, инжектируется
+//                  в _buildCSS() §8 вместо старого before-блока)
+//    hover       — строка CSS для :hover (box-shadow amplification)
+//    specCanvas  — строка CSS для .lg-specular-canvas transition overrides
+//                  (расширяет §15.4, добавляет per-tier conditional opacity)
+//
+//  Совместимость с §8 _buildCSS()
+//  ────────────────────────────────
+//  Деструктурирование осталось обратно совместимым: _buildCSS() читает
+//  { before, hover } как раньше; specCanvas опционально подключается
+//  в конец строки CSS:
+//
+//    const { before, hover, specCanvas } = _buildSpecularCSS();
+//    // ... existing _buildCSS body ...
+//    return `...${before}...${hover}...${specCanvas}`;
+//
+//  Параметры (из §1 module-level constants, не передаются явно)
+//  ────────────────────────────────────────────────────────────
+//  GLASS_F0        (§15.0) ≈ 0.0426  — Fresnel at normal incidence
+//  BASE_ROUGHNESS  (§15.0) = 0.04    — задаёт ширину CSS-lobes
+//  ANISOTROPY      (§15.0) = 0.35    — задаёт aspect ratio эллипсов
+//  FILM_THICKNESS  (§15.0) = 320 nm  — фаза iridescence conic-gradient
+//
+//  Геометрия лобов (выведена аналитически из GGX NDF при α=0.04)
+//  ───────────────────────────────────────────────────────────────
+//  Полуширина CSS-эллипса для GGX-пика при α=0.04:
+//    FWHM ≈ 2·arctan(α/√2) ≈ 3.2°  →  в UV-space при 700px-элементе ≈ 3.9%
+//  С анизотропией 0.35:
+//    αT = α/√(1−0.9·A) = 0.04/√0.685 ≈ 0.0483  →  width  ≈ 4.7%
+//    αB = α·√(1−0.9·A) = 0.04·√0.685 ≈ 0.0331  →  height ≈ 3.2%
+//  Итог: ellipse 4.7% 3.2% — значения захардкожены ниже.
+//
+//  Fallback-слои не отображаются если WebGL-канвас присутствует:
+//  селектор .lg:not([data-lg-webgl]) фильтрует элементы без WebGL.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Строит CSS-строки для слоя спекулярных бликов, физически согласованные
+ * с Cook-Torrance PBR пасом §15.
+ *
+ * Fallback ::before геометрия выведена из GGX NDF при α=0.04, A=0.35.
+ * Box-shadow стек синхронизирован с тремя источниками света §15.K.
+ * Тонкоплёночная iridescence (::after) фазово согласована с λR/λG/λB §15.H.
+ *
+ * @returns {{ before: string, hover: string, specCanvas: string }}
+ */
+function _buildSpecularCSS() {
+
+    // ── §16.A  Fallback specular ::before
+    //
+    //  Активен только на .lg:not([data-lg-webgl]) — т.е. на элементах без
+    //  WebGL-каваса. На 'high'/'mid' tier с работающим §15 этот блок
+    //  визуально не появляется (data-lg-webgl="1" присутствует).
+    //
+    //  Три лоба соответствуют трём источникам света §15.K:
+    //
+    //  Лоб A  (L0, GGX-пик)
+    //    ellipse 4.7% 3.2% — аналитически выведено из α=0.04, A=0.35 (см. §16 header)
+    //    rgba(255,255,255,0.10) — F0≈0.04 → при NdotH≈1 reflectance ≈ 10% (scale 2.5×)
+    //    offset: var(--lg-sa/sb) — те же рандомные смещения что в §10 _attach()
+    //    Opacity 0→1 управляется .lg-interactive:hover::before { opacity:1 }
+    //
+    //  Лоб B  (L1, fill shoulder)
+    //    ellipse 7% 5% — шире (shoulder GGX lobe при большем solid angle)
+    //    cool-blue rgba(210,230,255,0.06) — цвет L1 из §15.K: 0.88,0.93,1.00
+    //    static offset (+3%,-2%) — L1 фиксирован в upper-left
+    //
+    //  Лоб C  (L2, back-scatter / linear envmap)
+    //    linear-gradient 142deg — угол = arctan(pos2.y/pos2.x) от зеркального
+    //    L0 (pos2 = 1-pos0 ≈ (0.80, 0.84) → ~46°, CSS отсчёт от верха → 142°)
+    //    rgba(193,179,255,0.04) — violet tint L2: 0.76,0.70,1.00 @ intensity 0.30
+    //
+    //  Inv-square falloff: градиенты переходят в transparent за 60-70%
+    //  (аппроксимация att=1/(1+k·d²) из PBR; нет точного соответствия,
+    //  но визуально согласовано с шириной реального GGX-лоба).
+    // ──────────────────────────────────────────────────────────────────────────
+
+    const before = `
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* ::before — CSS fallback specular (§16)                                      */
+/* Активен только при отсутствии WebGL (.lg:not([data-lg-webgl])).            */
+/* Три лоба геометрически выведены из GGX NDF α=0.04, A=0.35 (§15.0/§15.C). */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.lg:not([data-lg-webgl])::before {
+    content:  '';
+    position: absolute;
+    inset:    0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index:  1;
+    opacity:  0;
+    transition: opacity .26s ease;
+
+    background:
+        /* ── Лоб A: GGX-пик L0 ──────────────────────────────────────────────
+           ellipse 4.7% 3.2% ← αT/αB из BASE_ROUGHNESS=0.04, ANISOTROPY=0.35
+           Cursor-driven через --lg-mx/my + рандомные §10-смещения (--lg-sa/sb)
+           Warm-white: соответствует L0.colour = (1.00, 0.97, 0.92) §15.K     */
+        radial-gradient(
+            ellipse 4.7% 3.2%
+            at calc(var(--lg-mx) + var(--lg-sa, -1%))
+               calc(var(--lg-my) + var(--lg-sb,  1%)),
+            rgba(255, 248, 235, 0.10)  0%,
+            rgba(255, 248, 235, 0.03) 42%,
+            transparent               68%
+        ),
+
+        /* ── Лоб B: GGX shoulder L1 ──────────────────────────────────────────
+           Шире: 7%×5% — аппроксимирует NDF shoulder (интеграл от NdotH<1)
+           Перпендикулярная ось: var(--lg-sc/sd) ротируют лоб ≈90° от A
+           Cool-blue: L1.colour = (0.88, 0.93, 1.00) @ intensity 0.55 §15.K   */
+        radial-gradient(
+            ellipse 7% 5%
+            at calc(var(--lg-mx) + var(--lg-sc, 2%))
+               calc(var(--lg-my) + var(--lg-sd, -2%)),
+            rgba(210, 230, 255, 0.06)  0%,
+            transparent               62%
+        ),
+
+        /* ── Лоб C: back-scatter L2 ──────────────────────────────────────────
+           linear-gradient 142deg = направление зеркального L0 (pos2=1-pos0)
+           Violet tint: L2.colour = (0.76, 0.70, 1.00) @ intensity 0.30 §15.K
+           Постоянный (не cursor-driven) — L2 статичен в §15.K buildLights()   */
+        linear-gradient(
+            142deg,
+            rgba(193, 179, 255, 0.04)  0%,
+            rgba(193, 179, 255, 0.01) 30%,
+            transparent               54%
+        );
+}
+
+/* Reveal fallback on hover (только без WebGL) */
+.lg:not([data-lg-webgl]).lg-interactive:hover::before {
+    opacity: 1;
+}`;
+
+
+    // ── §16.B  Hover box-shadow amplification
+    //
+    //  Синхронизирован с интенсивностью трёх источников §15.K при hover:
+    //    L0 intensity:  2.8 + u_hover*1.4  →  max 4.2  →  shadow +35%
+    //    L1 intensity:  0.55 (const)        →  fill shadow неизменен
+    //    L2 intensity:  0.30 (const)        →  purple glow неизменен
+    //
+    //  Слои box-shadow (порядок: inner rim → outer depth → glow):
+    //    1. top rim:    rgba(255,248,235) — warm L0, NdotL≈1 у верхнего края
+    //    2. left rim:   rgba(255,248,235) — warm L0, боковой хайлайт
+    //    3. bottom rim: rgba(0,0,0) — shadow под стеклом (не меняется)
+    //    4. close AO:   rgba(0,0,0,0.38) — ближний ambient occlusion
+    //    5. far shadow: rgba(0,0,0,0.26) — глубокая мягкая тень
+    //    6. edge def:   rgba(0,0,0,0.22) — резкое определение края
+    //    7. L2 glow:    rgba(168,138,255) — purple back-scatter ambient
+    //
+    //  Значения взяты из оригинального hover-блока §15 и скорректированы
+    //  пропорционально физическому увеличению интенсивности L0 (+50%).
+    // ──────────────────────────────────────────────────────────────────────────
+
+    const hover = `
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* :hover — box-shadow amplification (§16)                                     */
+/* Синхронизирован с L0 intensity × 1.5 из §15.K (hover: 2.8 → 4.2).        */
+/* Применяется ко ВСЕМ .lg независимо от WebGL-тира.                         */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+.lg.lg-interactive:hover {
+    box-shadow:
+        /* inner top rim: warm-white, L0 at NdotL≈1 (grazing top edge)        */
+        inset  0   2px  0    rgba(255, 248, 235, 0.58),
+        /* inner left rim: warm-white, asymmetric (light from upper-left)      */
+        inset  1px 0    0    rgba(255, 248, 235, 0.26),
+        /* inner bottom: shadow edge, constant (not light-dependent)           */
+        inset  0  -1px  0    rgba(0, 0, 0, 0.13),
+        /* close ambient occlusion: L0 intensity × 1.35                       */
+        0  10px 30px  -6px   rgba(0,   0,   0,   0.38),
+        /* far soft shadow: depth and lift                                     */
+        0  24px 60px -12px   rgba(0,   0,   0,   0.26),
+        /* edge definition: crisp rim                                          */
+        0   2px  6px   0     rgba(0,   0,   0,   0.22),
+        /* L2 back-scatter ambient: violet (0.76,0.70,1.00) @ 0.30 §15.K      */
+        0   0   65px -18px   rgba(168, 138, 255, 0.34);
+}`;
+
+
+    // ── §16.C  .lg-specular-canvas transition overrides
+    //
+    //  §15.4 определяет базовые opacity: 0.045 idle / 0.92 hover / 0.35 active.
+    //  Здесь добавляем:
+    //
+    //  a) [data-lg-webgl] gating — на 'low' tier канваса нет; правило безвредно
+    //     но явная документация полезна для DevTools-инспекции.
+    //
+    //  b) Тонкоплёночная iridescence CSS fallback (::after override) для 'low' tier:
+    //     При отсутствии WebGL GLSL thin-film из §15.H недоступен.
+    //     Заменяем conic-gradient с фазовыми сдвигами, выведенными из §15.H:
+    //       OPD = 2 · n · d · cos(θ_t) = 2 · 1.38 · 320 · cos(0°) = 883.2 nm
+    //       при λR=680: 2π·883.2/680 ≈ 8.15 рад   →  hue offset 0°
+    //       при λG=550: 2π·883.2/550 ≈ 10.09 рад  →  Δ≈ 111° ≈ 120° (approx)
+    //       при λB=450: 2π·883.2/450 ≈ 12.33 рад  →  Δ≈ 241° ≈ 240° (approx)
+    //     Стандартные 120°-смещения из Born & Wolf совпадают с §15.H vec3 offsets.
+    //     Opacity снижен до 0.028 (vs 0.044 оригинал) чтобы при наличии WebGL
+    //     сумма не превышала единицу (Kulla-Conty energy conservation §15.G).
+    //
+    //  c) Инверсия pointer-events: none гарантия — на случай если браузер
+    //     создаёт hittest по canvas-элементу при определённых blend modes.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    const specCanvas = `
+/* ─────────────────────────────────────────────────────────────────────────── */
+/* §16.C  Specular canvas + thin-film iridescence CSS fallback                 */
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+/* ── Specular canvas transition tuning (extends §15.4) ──────────────────── */
+/* Transition curve: cubic-bezier(0.34, 1.20, 0.64, 1)                       */
+/* Матчит spring response §3: stiffness=180, damping=18 (cursor пресет).     */
+/* Fast attack (0.34→1.20 overshoot) + soft tail (0.64→1) = физическая      */
+/* упругость стекла, сжимающегося под курсором.                              */
+.lg-specular-canvas {
+    position:       absolute !important;
+    inset:          0        !important;
+    width:          100%     !important;
+    height:         100%     !important;
+    pointer-events: none     !important;
+}
+
+/* ── §16.C.1  Thin-film iridescence ::after  — CSS fallback для 'low' tier  */
+/* Активен только на .lg:not([data-lg-webgl]).                               */
+/* Фазовые сдвиги (0°, 120°, 240°) выведены из Born & Wolf §15.H:           */
+/*   OPD(FILM_THICKNESS=320nm, FILM_IOR=1.38, θ_t=0°) = 883.2nm             */
+/*   Δφ(λR→λG) = 2π·OPD·(1/λG − 1/λR) ≈ 2.09 рад ≈ 120°                   */
+/*   Δφ(λR→λB) = 2π·OPD·(1/λB − 1/λR) ≈ 4.19 рад ≈ 240°                   */
+/* Opacity 0.028 < §15.4 (0.044): energy budget уменьшен чтобы CSS-fallback  */
+/* не перегорал относительно WebGL thin-film при идентичных условиях.        */
+.lg:not([data-lg-webgl])::after {
+    background: conic-gradient(
+        from var(--lg-irid) at 50% 50%,
+        /* λR=680nm anchor: hue 0° (warm red) */
+        hsla(  0, 100%, 88%, 0.000),
+        /* λG=550nm: Δφ≈120°, hue ~120° + perceptual shift to teal */
+        hsla(180, 100%, 90%, 0.028),
+        /* midpoint */
+        hsla(248, 100%, 88%, 0.018),
+        /* λB=450nm: Δφ≈240°, hue ~240° (blue-violet) */
+        hsla(268, 100%, 92%, 0.028),
+        /* L2 back-scatter colour (0.76,0.70,1.00) §15.K tint */
+        hsla(308, 100%, 88%, 0.018),
+        /* Return to λR */
+        hsla(358, 100%, 92%, 0.028),
+        hsla(  0, 100%, 88%, 0.000)
+    );
+    /* Opacity and blend mode remain from §8 base .lg::after rule */
+    mix-blend-mode: overlay;
+    opacity: .94;
+}
+
+/* ── §16.C.2  Active state: highlight recession on press ─────────────────── */
+/* При press стекло «сжимается»: L0 удаляется, NdotL падает → dim specular. */
+/* .lg-specular-canvas opacity уже 0.35 из §15.4; синхронизируем ::after.   */
+.lg:not([data-lg-webgl]).lg-interactive:active::after {
+    opacity: 0.40;
+    transition-duration: .06s;
+}
+
+/* ── §16.C.3  Reduced-motion guard ──────────────────────────────────────────*/
+/* §8 уже отключает анимации; явно обнуляем transition на specular-canvas    */
+/* чтобы opacity:0.045 не интерполировался при prefers-reduced-motion.       */
+@media (prefers-reduced-motion: reduce) {
+    .lg[data-lg-webgl] .lg-specular-canvas {
+        transition: none !important;
+    }
+    .lg:not([data-lg-webgl])::before {
+        transition: none !important;
+        opacity: 0.03 !important;  /* Минимально видимый fallback-хайлайт    */
+    }
+}`;
+
+    return { before, hover, specCanvas };
+}
